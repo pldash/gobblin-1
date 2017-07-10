@@ -1,19 +1,33 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.source.extractor;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import gobblin.records.RecordStreamWithMetadata;
+
+import edu.umd.cs.findbugs.annotations.SuppressWarnings;
+import io.reactivex.Emitter;
+import io.reactivex.Flowable;
+import io.reactivex.functions.BiConsumer;
+import javax.annotation.Nullable;
 
 
 /**
@@ -51,7 +65,10 @@ public interface Extractor<S, D> extends Closeable {
    * @throws DataRecordException if there is problem with the extracted data record
    * @throws java.io.IOException if there is problem extracting the next data record from the source
    */
-  public D readRecord(@Deprecated D reuse) throws DataRecordException, IOException;
+  @Nullable
+  default D readRecord(@Deprecated D reuse) throws DataRecordException, IOException {
+    throw new UnsupportedOperationException();
+  }
 
   /**
    * Get the expected source record count.
@@ -69,4 +86,40 @@ public interface Extractor<S, D> extends Closeable {
    */
   @Deprecated
   public long getHighWatermark();
+
+  /**
+   * Read an {@link RecordEnvelope}. By default, just wrap {@link #readRecord(Object)} in a {@link RecordEnvelope}.
+   */
+  @SuppressWarnings(value = "RCN_REDUNDANT_NULLCHECK_OF_NONNULL_VALUE",
+      justification = "Findbugs believes readRecord(null) is non-null. This is not true.")
+  default RecordEnvelope<D> readRecordEnvelope() throws DataRecordException, IOException {
+    D record = readRecord(null);
+    return record == null ? null : new RecordEnvelope<>(record);
+  }
+
+  /**
+   * @param shutdownRequest an {@link AtomicBoolean} that becomes true when a shutdown has been requested.
+   * @return a {@link Flowable} with the records from this source. Note the flowable should honor downstream backpressure.
+   */
+  default RecordStreamWithMetadata<D, S> recordStream(AtomicBoolean shutdownRequest) throws IOException {
+    S schema = getSchema();
+    Flowable<RecordEnvelope<D>> recordStream = Flowable.generate(() -> shutdownRequest, (BiConsumer<AtomicBoolean, Emitter<RecordEnvelope<D>>>) (state, emitter) -> {
+      if (state.get()) {
+        emitter.onComplete();
+      }
+      try {
+        RecordEnvelope<D> record = readRecordEnvelope();
+        if (record != null) {
+          emitter.onNext(record);
+        } else {
+          emitter.onComplete();
+        }
+      } catch (DataRecordException | IOException exc) {
+        emitter.onError(exc);
+      }
+    });
+    recordStream = recordStream.doFinally(this::close);
+    return new RecordStreamWithMetadata<>(recordStream, schema);
+  }
+
 }

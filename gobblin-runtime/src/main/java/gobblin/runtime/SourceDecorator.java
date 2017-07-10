@@ -1,13 +1,18 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.runtime;
@@ -16,15 +21,20 @@ import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
 
-import com.google.common.base.Throwables;
 import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.google.common.base.Throwables;
 
 import gobblin.configuration.SourceState;
 import gobblin.configuration.WorkUnitState;
 import gobblin.source.Source;
 import gobblin.source.extractor.Extractor;
+import gobblin.source.workunit.BasicWorkUnitStream;
 import gobblin.source.workunit.WorkUnit;
 import gobblin.util.Decorator;
+import gobblin.source.WorkUnitStreamSource;
+import gobblin.source.workunit.WorkUnitStream;
 
 
 /**
@@ -33,7 +43,8 @@ import gobblin.util.Decorator;
  *
  * @author Yinan Li
  */
-public class SourceDecorator<S, D> implements Source<S, D>, Decorator {
+public class SourceDecorator<S, D> implements WorkUnitStreamSource<S, D>, Decorator {
+  private static final Logger LOG = LoggerFactory.getLogger(SourceDecorator.class);
 
   private final Source<S, D> source;
   private final String jobId;
@@ -42,7 +53,7 @@ public class SourceDecorator<S, D> implements Source<S, D>, Decorator {
   public SourceDecorator(Source<S, D> source, String jobId, Logger logger) {
     this.source = source;
     this.jobId = jobId;
-    this.logger = logger;
+    this.logger = null != logger ? logger : LOG;
   }
 
   @Override
@@ -54,6 +65,25 @@ public class SourceDecorator<S, D> implements Source<S, D>, Decorator {
         return Collections.emptyList();
       }
       return workUnits;
+    } catch (Throwable t) {
+      this.logger.error("Failed to get work units for job " + this.jobId, t);
+      // Return null in case of errors
+      return null;
+    }
+  }
+
+  @Override
+  public WorkUnitStream getWorkunitStream(SourceState state) {
+    try {
+      if (this.source instanceof WorkUnitStreamSource) {
+        return ((WorkUnitStreamSource) this.source).getWorkunitStream(state);
+      }
+      List<WorkUnit> workUnits = this.source.getWorkunits(state);
+      if (workUnits == null) {
+        // Return an empty list if no work units are returned by the source
+        workUnits = Collections.emptyList();
+      }
+      return new BasicWorkUnitStream.Builder(workUnits).build();
     } catch (Throwable t) {
       this.logger.error("Failed to get work units for job " + this.jobId, t);
       // Return null in case of errors

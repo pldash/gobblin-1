@@ -1,13 +1,18 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.cluster;
@@ -16,16 +21,21 @@ import java.io.File;
 import java.util.List;
 import java.util.Properties;
 
-import com.google.common.base.Optional;
-import com.google.common.eventbus.EventBus;
-import com.google.common.util.concurrent.AbstractIdleService;
-
+import javax.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.google.common.base.Optional;
+import com.google.common.eventbus.EventBus;
+import com.google.common.util.concurrent.AbstractIdleService;
+import com.typesafe.config.Config;
+
 import gobblin.annotation.Alpha;
-import gobblin.configuration.ConfigurationKeys;
+import gobblin.cluster.event.DeleteJobConfigArrivalEvent;
 import gobblin.cluster.event.NewJobConfigArrivalEvent;
+import gobblin.cluster.event.UpdateJobConfigArrivalEvent;
+import gobblin.configuration.ConfigurationKeys;
+import gobblin.util.ConfigUtils;
 import gobblin.util.SchedulerUtils;
 
 
@@ -51,26 +61,38 @@ public class JobConfigurationManager extends AbstractIdleService {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(JobConfigurationManager.class);
 
-  private final EventBus eventBus;
-  private final Optional<String> jobConfDirPath;
+  protected final EventBus eventBus;
+  protected final Config config;
+  protected Optional<String> jobConfDirPath;
 
-  public JobConfigurationManager(EventBus eventBus, Optional<String> jobConfDirPath) {
+  public JobConfigurationManager(EventBus eventBus, Config config) {
     this.eventBus = eventBus;
-    this.jobConfDirPath = jobConfDirPath;
+    this.config = config;
+
+    this.jobConfDirPath =
+        config.hasPath(GobblinClusterConfigurationKeys.JOB_CONF_PATH_KEY) ? Optional
+            .of(config.getString(GobblinClusterConfigurationKeys.JOB_CONF_PATH_KEY)) : Optional.<String>absent();
   }
 
   @Override
   protected void startUp() throws Exception {
     if (this.jobConfDirPath.isPresent()) {
       File path = new File(this.jobConfDirPath.get());
-      String pwd = System.getProperty("user.dir");
-      File jobConfigDir = new File(pwd, path.getName() + GobblinClusterConfigurationKeys.TAR_GZ_FILE_SUFFIX);
+
+      File jobConfigDir = path;
+      // Backward compatibility: Previous impl was forcing users to look for jobConf within ${user.dir}
+      // .. so if jobConfigDir does not exists, try to resolve config path via legacy route for backward
+      // .. compatibility
+      if (!path.exists()) {
+        String pwd = System.getProperty("user.dir");
+        jobConfigDir = new File(pwd, path.getName() + GobblinClusterConfigurationKeys.TAR_GZ_FILE_SUFFIX);
+      }
 
       if (jobConfigDir.exists()) {
         LOGGER.info("Loading job configurations from " + jobConfigDir);
-        Properties properties = new Properties();
-        properties.setProperty(ConfigurationKeys.JOB_CONFIG_FILE_DIR_KEY, jobConfigDir.getAbsolutePath());
-        List<Properties> jobConfigs = SchedulerUtils.loadJobConfigs(properties);
+        Properties properties = ConfigUtils.configToProperties(this.config);
+        properties.setProperty(ConfigurationKeys.JOB_CONFIG_FILE_GENERAL_PATH_KEY, "file://" + jobConfigDir.getAbsolutePath());
+        List<Properties> jobConfigs = SchedulerUtils.loadGenericJobConfigs(properties);
         LOGGER.info("Loaded " + jobConfigs.size() + " job configuration(s)");
         for (Properties config : jobConfigs) {
           postNewJobConfigArrival(config.getProperty(ConfigurationKeys.JOB_NAME_KEY), config);
@@ -86,7 +108,18 @@ public class JobConfigurationManager extends AbstractIdleService {
     // Nothing to do
   }
 
-  private void postNewJobConfigArrival(String jobName, Properties jobConfig) {
+  protected void postNewJobConfigArrival(String jobName, Properties jobConfig) {
+    LOGGER.info(String.format("Posting new JobConfig with name: %s and config: %s", jobName, jobConfig));
     this.eventBus.post(new NewJobConfigArrivalEvent(jobName, jobConfig));
+  }
+
+  protected void postUpdateJobConfigArrival(String jobName, Properties jobConfig) {
+    LOGGER.info(String.format("Posting update JobConfig with name: %s and config: %s", jobName, jobConfig));
+    this.eventBus.post(new UpdateJobConfigArrivalEvent(jobName, jobConfig));
+  }
+
+  protected void postDeleteJobConfigArrival(String jobName, @Nullable Properties jobConfig) {
+    LOGGER.info(String.format("Posting delete JobConfig with name: %s and config: %s", jobName, jobConfig));
+    this.eventBus.post(new DeleteJobConfigArrivalEvent(jobName, jobConfig));
   }
 }

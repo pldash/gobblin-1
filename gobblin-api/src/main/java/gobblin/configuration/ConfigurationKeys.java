@@ -1,13 +1,18 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.configuration;
@@ -41,12 +46,37 @@ public class ConfigurationKeys {
   /**
    * State store configuration properties.
    */
+  // State store type.  References an alias or factory class name
+  public static final String STATE_STORE_TYPE_KEY = "state.store.type";
+  public static final String DEFAULT_STATE_STORE_TYPE = "fs";
+  public static final String STATE_STORE_TYPE_NOOP = "noop";
+
+  public static final String CONFIG_RUNTIME_PREFIX = "gobblin.config.runtime.";
   // Root directory where task state files are stored
   public static final String STATE_STORE_ROOT_DIR_KEY = "state.store.dir";
   // File system URI for file-system-based task store
   public static final String STATE_STORE_FS_URI_KEY = "state.store.fs.uri";
+  // Thread pool size for listing dataset state store
+  public static final String THREADPOOL_SIZE_OF_LISTING_FS_DATASET_STATESTORE = "state.store.threadpoolSizeOfListingFsDatasetStateStore";
+  public static final int DEFAULT_THREADPOOL_SIZE_OF_LISTING_FS_DATASET_STATESTORE = 10;
   // Enable / disable state store
   public static final String STATE_STORE_ENABLED = "state.store.enabled";
+  public static final String STATE_STORE_COMPRESSED_VALUES_KEY = "state.store.compressedValues";
+  public static final boolean DEFAULT_STATE_STORE_COMPRESSED_VALUES = true;
+  // DB state store configuration
+  public static final String STATE_STORE_DB_JDBC_DRIVER_KEY = "state.store.db.jdbc.driver";
+  public static final String DEFAULT_STATE_STORE_DB_JDBC_DRIVER = "com.mysql.jdbc.Driver";
+  // min idle time for eviction
+  public static final String STATE_STORE_DB_CONN_MIN_EVICTABLE_IDLE_TIME_KEY =
+      "state.store.db.conn.min.evictable.idle.time";
+  public static final long DEFAULT_STATE_STORE_DB_CONN_MIN_EVICTABLE_IDLE_TIME = 5 * 60 * 1000;
+  public static final String STATE_STORE_DB_URL_KEY = "state.store.db.url";
+  public static final String STATE_STORE_DB_USER_KEY = "state.store.db.user";
+  public static final String STATE_STORE_DB_PASSWORD_KEY = "state.store.db.password";
+  public static final String STATE_STORE_DB_TABLE_KEY = "state.store.db.table";
+  public static final String DEFAULT_STATE_STORE_DB_TABLE = "gobblin_job_state";
+
+  public static final String DATASETURN_STATESTORE_NAME_PARSER = "state.store.datasetUrnStateStoreNameParser";
 
   /**
    * Job scheduler configuration properties.
@@ -56,9 +86,13 @@ public class ConfigurationKeys {
   public static final int DEFAULT_JOB_EXECUTOR_THREAD_POOL_SIZE = 5;
   // Job configuration file monitor polling interval in milliseconds
   public static final String JOB_CONFIG_FILE_MONITOR_POLLING_INTERVAL_KEY = "jobconf.monitor.interval";
-  public static final long DEFAULT_JOB_CONFIG_FILE_MONITOR_POLLING_INTERVAL = 300000;
-  // Directory where all job configuration files are stored
+  public static final long DEFAULT_JOB_CONFIG_FILE_MONITOR_POLLING_INTERVAL = 30000;
+  public static final long DISABLED_JOB_CONFIG_FILE_MONITOR_POLLING_INTERVAL = -1L;
+  // Directory where all job configuration files are stored WHEN ALL confs reside in local FS.
   public static final String JOB_CONFIG_FILE_DIR_KEY = "jobconf.dir";
+
+  // Path where all job configuration files stored
+  public static final String JOB_CONFIG_FILE_GENERAL_PATH_KEY = "jobconf.fullyQualifiedPath" ;
   // Job configuration file extensions
   public static final String JOB_CONFIG_FILE_EXTENSIONS_KEY = "jobconf.extensions";
   public static final String DEFAULT_JOB_CONFIG_FILE_EXTENSIONS = "pull,job";
@@ -66,6 +100,7 @@ public class ConfigurationKeys {
   // Note this only applies to jobs scheduled by the built-in Quartz-based job scheduler.
   public static final String SCHEDULER_WAIT_FOR_JOB_COMPLETION_KEY = "scheduler.wait.for.job.completion";
   public static final String DEFAULT_SCHEDULER_WAIT_FOR_JOB_COMPLETION = Boolean.TRUE.toString();
+
 
   /**
    * Task executor and state tracker configuration properties.
@@ -76,6 +111,21 @@ public class ConfigurationKeys {
   public static final int DEFAULT_TASK_EXECUTOR_THREADPOOL_SIZE = 2;
   public static final int DEFAULT_TASK_STATE_TRACKER_THREAD_POOL_CORE_SIZE = 1;
   public static final int DEFAULT_TASK_RETRY_THREAD_POOL_CORE_SIZE = 1;
+
+  /**
+   * Common flow configuration properties.
+   */
+  public static final String FLOW_NAME_KEY = "flow.name";
+  public static final String FLOW_GROUP_KEY = "flow.group";
+  public static final String FLOW_DESCRIPTION_KEY = "flow.description";
+  public static final String FLOW_EXECUTION_ID_KEY = "flow.executionId";
+
+  /**
+   * Common topology configuration properties.
+   */
+  public static final String TOPOLOGY_NAME_KEY = "topology.name";
+  public static final String TOPOLOGY_GROUP_KEY = "topology.group";
+  public static final String TOPOLOGY_DESCRIPTION_KEY = "topology.description";
 
   /**
    * Common job configuration properties.
@@ -126,11 +176,28 @@ public class ConfigurationKeys {
   public static final boolean DEFAULT_CLEANUP_STAGING_DATA_PER_TASK = true;
   public static final String CLEANUP_STAGING_DATA_BY_INITIALIZER = "cleanup.staging.data.by.initializer";
 
+  /** Optional, for user to specified which template to use, inside .job file */
+  public static final String JOB_TEMPLATE_PATH = "job.template" ;
+
+  /**
+   * Configuration property used only for job configuration file's tempalte, inside .template file
+   */
+  public static final String REQUIRED_ATRRIBUTES_LIST = "gobblin.template.required_attributes";
+
+  /**
+   * Configuration for emitting job events
+   */
+  public static final String EVENT_METADATA_GENERATOR_CLASS_KEY = "event.metadata.generator.class";
+  public static final String DEFAULT_EVENT_METADATA_GENERATOR_CLASS_KEY = "noop";
+
   /**
    * Configuration properties used internally.
    */
   public static final String JOB_ID_KEY = "job.id";
+  public static final String JOB_KEY_KEY = "job.key";
   public static final String TASK_ID_KEY = "task.id";
+  public static final String TASK_KEY_KEY = "task.key";
+  public static final String TASK_ATTEMPT_ID_KEY = "task.AttemptId";
   public static final String JOB_CONFIG_FILE_PATH_KEY = "job.config.path";
   public static final String TASK_FAILURE_EXCEPTION_KEY = "task.failure.exception";
   public static final String TASK_RETRIES_KEY = "task.retries";
@@ -152,6 +219,7 @@ public class ConfigurationKeys {
    */
   public static final String WORK_UNIT_LOW_WATER_MARK_KEY = "workunit.low.water.mark";
   public static final String WORK_UNIT_HIGH_WATER_MARK_KEY = "workunit.high.water.mark";
+  public static final String WORK_UNIT_SKIP_KEY = "workunit.skip";
 
   /**
    * Work unit runtime state related configuration properties.
@@ -159,6 +227,13 @@ public class ConfigurationKeys {
   public static final String WORK_UNIT_WORKING_STATE_KEY = "workunit.working.state";
   public static final String WORK_UNIT_STATE_RUNTIME_HIGH_WATER_MARK = "workunit.state.runtime.high.water.mark";
   public static final String WORK_UNIT_STATE_ACTUAL_HIGH_WATER_MARK_KEY = "workunit.state.actual.high.water.mark";
+  public static final String WORK_UNIT_DATE_PARTITION_KEY = "workunit.source.date.partition";
+
+  /**
+   * Task execution properties.
+   */
+  public static final String TASK_SYNCHRONOUS_EXECUTION_MODEL_KEY = "task.execution.synchronousExecutionModel";
+  public static final boolean DEFAULT_TASK_SYNCHRONOUS_EXECUTION_MODEL = true;
 
   /**
    * Watermark interval related configuration properties.
@@ -197,6 +272,8 @@ public class ConfigurationKeys {
   public static final String CONVERTER_AVRO_EXTRACTOR_FIELD_PATH = "converter.avro.extractor.field.path";
   public static final String CONVERTER_STRING_FILTER_PATTERN = "converter.string.filter.pattern";
   public static final String CONVERTER_STRING_SPLITTER_DELIMITER = "converter.string.splitter.delimiter";
+  public static final String CONVERTER_STRING_SPLITTER_SHOULD_TRIM_RESULTS = "converter.string.splitter.shouldITrimResults";
+  public static final boolean DEFAULT_CONVERTER_STRING_SPLITTER_SHOULD_TRIM_RESULTS = false;
   public static final String CONVERTER_CSV_TO_JSON_ENCLOSEDCHAR = "converter.csv.to.json.enclosedchar";
   public static final String DEFAULT_CONVERTER_CSV_TO_JSON_ENCLOSEDCHAR = "\0";
   public static final String CONVERTER_AVRO_FIELD_PICK_FIELDS = "converter.avro.fields";
@@ -254,6 +331,10 @@ public class ConfigurationKeys {
   public static final String SIMPLE_WRITER_DELIMITER = "simple.writer.delimiter";
   public static final String SIMPLE_WRITER_PREPEND_SIZE = "simple.writer.prepend.size";
 
+  // Internal use only - used to send metadata to publisher
+  public static final String WRITER_METADATA_KEY = WRITER_PREFIX + "._internal.metadata";
+  public static final String WRITER_PARTITION_PATH_KEY = WRITER_PREFIX + "._internal.partition.path";
+
   /**
    * Writer configuration properties used internally.
    */
@@ -274,6 +355,12 @@ public class ConfigurationKeys {
   public static final String ROW_LEVEL_ERR_FILE = QUALITY_CHECKER_PREFIX + ".row.err.file";
   public static final String QUALITY_CHECKER_TIMEZONE = QUALITY_CHECKER_PREFIX + ".timezone";
   public static final String DEFAULT_QUALITY_CHECKER_TIMEZONE = PST_TIMEZONE_NAME;
+  public static final String CLEAN_ERR_DIR = QUALITY_CHECKER_PREFIX + ".clean.err.dir";
+  public static final boolean DEFAULT_CLEAN_ERR_DIR = false;
+  /** Set the approximate max number of records to write in err_file for each task. Note the actual number of records
+   * written may be anything from 0 to about the value set + 100. */
+  public static final String ROW_LEVEL_ERR_FILE_RECORDS_PER_TASK = QUALITY_CHECKER_PREFIX + ".row.errFile.recordsPerTask";
+  public static final long DEFAULT_ROW_LEVEL_ERR_FILE_RECORDS_PER_TASK = 1000000;
 
   /**
    * Configuration properties used by the row count policies.
@@ -295,6 +382,24 @@ public class ConfigurationKeys {
   public static final String DATA_PUBLISHER_PREFIX = "data.publisher";
 
   /**
+   * Metadata configuration
+   *
+   * PUBLISH_WRITER_METADATA_KEY: Whether or not to publish writer-generated metadata
+   * PUBLISH_WRITER_METADATA_MERGER_NAME_KEY: Class to use to merge writer-generated metadata.
+   */
+  public static final String DATA_PUBLISH_WRITER_METADATA_KEY = DATA_PUBLISHER_PREFIX + ".metadata.publish.writer";
+  public static final String DATA_PUBLISH_WRITER_METADATA_MERGER_NAME_KEY = DATA_PUBLISHER_PREFIX + ".metadata.publish.writer.merger.class";
+
+  /**
+   * Metadata configuration properties used internally
+   */
+  public static final String DATA_PUBLISH_WRITER_METADATA_MERGER_NAME_DEFAULT = "gobblin.metadata.types.GlobalMetadataJsonMerger";
+  public static final String DATA_PUBLISHER_METADATA_OUTPUT_DIR =  DATA_PUBLISHER_PREFIX + ".metadata.output.dir";
+  //Metadata String in the configuration file
+  public static final String DATA_PUBLISHER_METADATA_STR = DATA_PUBLISHER_PREFIX + ".metadata.string";
+  public static final String DATA_PUBLISHER_METADATA_OUTPUT_FILE = DATA_PUBLISHER_PREFIX + ".metadata.output_file";
+
+  /**
    * @deprecated Use {@link #TASK_DATA_PUBLISHER_TYPE} and {@link #JOB_DATA_PUBLISHER_TYPE}.
    */
   @Deprecated
@@ -304,6 +409,8 @@ public class ConfigurationKeys {
   public static final String DEFAULT_DATA_PUBLISHER_TYPE = "gobblin.publisher.BaseDataPublisher";
   public static final String DATA_PUBLISHER_FILE_SYSTEM_URI = DATA_PUBLISHER_PREFIX + ".fs.uri";
   public static final String DATA_PUBLISHER_FINAL_DIR = DATA_PUBLISHER_PREFIX + ".final.dir";
+  public static final String DATA_PUBLISHER_APPEND_EXTRACT_TO_FINAL_DIR = DATA_PUBLISHER_PREFIX + ".appendExtractToFinalDir";
+  public static final boolean DEFAULT_DATA_PUBLISHER_APPEND_EXTRACT_TO_FINAL_DIR = true;
   public static final String DATA_PUBLISHER_REPLACE_FINAL_DIR = DATA_PUBLISHER_PREFIX + ".replace.final.dir";
   public static final String DATA_PUBLISHER_FINAL_NAME = DATA_PUBLISHER_PREFIX + ".final.name";
   public static final String DATA_PUBLISHER_OVERWRITE_ENABLED = DATA_PUBLISHER_PREFIX + ".overwrite.enabled";
@@ -313,6 +420,8 @@ public class ConfigurationKeys {
   public static final String PUBLISH_DATA_AT_JOB_LEVEL = "publish.data.at.job.level";
   public static final boolean DEFAULT_PUBLISH_DATA_AT_JOB_LEVEL = true;
   public static final String PUBLISHER_DIRS = DATA_PUBLISHER_PREFIX + ".output.dirs";
+  public static final String DATA_PUBLISHER_CAN_BE_SKIPPED = DATA_PUBLISHER_PREFIX + ".canBeSkipped";
+  public static final boolean DEFAULT_DATA_PUBLISHER_CAN_BE_SKIPPED = false;
 
   /**
    * Configuration properties used by the extractor.
@@ -354,16 +463,29 @@ public class ConfigurationKeys {
   public static final String SOURCE_QUERYBASED_IS_COMPRESSION_ENABLED = "source.querybased.is.compression.enabled";
   public static final String SOURCE_QUERYBASED_JDBC_RESULTSET_FETCH_SIZE =
       "source.querybased.jdbc.resultset.fetch.size";
+  public static final String SOURCE_QUERYBASED_ALLOW_REMOVE_UPPER_BOUNDS = "source.querybased.allowRemoveUpperBounds";
+
+  public static final String SOURCE_QUERYBASED_PROMOTE_UNSIGNED_INT_TO_BIGINT =
+      "source.querybased.promoteUnsignedIntToBigInt";
+  public static final boolean DEFAULT_SOURCE_QUERYBASED_PROMOTE_UNSIGNED_INT_TO_BIGINT = false;
+
+  public static final String ENABLE_DELIMITED_IDENTIFIER = "enable.delimited.identifier";
+  public static final boolean DEFAULT_ENABLE_DELIMITED_IDENTIFIER = false;
 
   /**
    * Configuration properties used by the FileBasedExtractor
    */
   public static final String SOURCE_FILEBASED_DATA_DIRECTORY = "source.filebased.data.directory";
   public static final String SOURCE_FILEBASED_FILES_TO_PULL = "source.filebased.files.to.pull";
+  public static final String SOURCE_FILEBASED_MAX_FILES_PER_RUN = "source.filebased.maxFilesPerRun";
   public static final String SOURCE_FILEBASED_FS_SNAPSHOT = "source.filebased.fs.snapshot";
   public static final String SOURCE_FILEBASED_FS_URI = "source.filebased.fs.uri";
   public static final String SOURCE_FILEBASED_PRESERVE_FILE_NAME = "source.filebased.preserve.file.name";
   public static final String SOURCE_FILEBASED_OPTIONAL_DOWNLOADER_CLASS = "source.filebased.downloader.class";
+  public static final String SOURCE_FILEBASED_ENCRYPTED_CONFIG_PATH = "source.filebased.encrypted";
+
+  public static final String SOURCE_FILEBASED_FS_PRIOR_SNAPSHOT_REQUIRED = "source.filebased.fs.prior.snapshot.required";
+  public static final boolean DEFAULT_SOURCE_FILEBASED_FS_PRIOR_SNAPSHOT_REQUIRED = false;
 
   /**
    * Configuration properties used internally by the KafkaSource.
@@ -381,24 +503,28 @@ public class ConfigurationKeys {
   /**
    * Configuration properties for source connection.
    */
-  public static final String SOURCE_CONN_USE_AUTHENTICATION = "source.conn.use.authentication";
-  public static final String SOURCE_CONN_PRIVATE_KEY = "source.conn.private.key";
-  public static final String SOURCE_CONN_KNOWN_HOSTS = "source.conn.known.hosts";
-  public static final String SOURCE_CONN_CLIENT_SECRET = "source.conn.client.secret";
-  public static final String SOURCE_CONN_CLIENT_ID = "source.conn.client.id";
-  public static final String SOURCE_CONN_DOMAIN = "source.conn.domain";
-  public static final String SOURCE_CONN_USERNAME = "source.conn.username";
-  public static final String SOURCE_CONN_PASSWORD = "source.conn.password";
-  public static final String SOURCE_CONN_SECURITY_TOKEN = "source.conn.security.token";
-  public static final String SOURCE_CONN_HOST_NAME = "source.conn.host";
-  public static final String SOURCE_CONN_VERSION = "source.conn.version";
-  public static final String SOURCE_CONN_TIMEOUT = "source.conn.timeout";
-  public static final String SOURCE_CONN_REST_URL = "source.conn.rest.url";
-  public static final String SOURCE_CONN_USE_PROXY_URL = "source.conn.use.proxy.url";
-  public static final String SOURCE_CONN_USE_PROXY_PORT = "source.conn.use.proxy.port";
-  public static final String SOURCE_CONN_DRIVER = "source.conn.driver";
-  public static final String SOURCE_CONN_PORT = "source.conn.port";
+  public static final String SOURCE_CONN_PREFIX = "source.conn.";
+  public static final String SOURCE_CONN_USE_AUTHENTICATION = SOURCE_CONN_PREFIX + "use.authentication";
+  public static final String SOURCE_CONN_PRIVATE_KEY = SOURCE_CONN_PREFIX + "private.key";
+  public static final String SOURCE_CONN_KNOWN_HOSTS = SOURCE_CONN_PREFIX + "known.hosts";
+  public static final String SOURCE_CONN_CLIENT_SECRET = SOURCE_CONN_PREFIX + "client.secret";
+  public static final String SOURCE_CONN_CLIENT_ID = SOURCE_CONN_PREFIX + "client.id";
+  public static final String SOURCE_CONN_DOMAIN = SOURCE_CONN_PREFIX + "domain";
+  public static final String SOURCE_CONN_USERNAME = SOURCE_CONN_PREFIX + "username";
+  public static final String SOURCE_CONN_PASSWORD = SOURCE_CONN_PREFIX + "password";
+  public static final String SOURCE_CONN_SECURITY_TOKEN = SOURCE_CONN_PREFIX + "security.token";
+  public static final String SOURCE_CONN_HOST_NAME = SOURCE_CONN_PREFIX + "host";
+  public static final String SOURCE_CONN_VERSION = SOURCE_CONN_PREFIX + "version";
+  public static final String SOURCE_CONN_TIMEOUT = SOURCE_CONN_PREFIX + "timeout";
+  public static final String SOURCE_CONN_REST_URL = SOURCE_CONN_PREFIX + "rest.url";
+  public static final String SOURCE_CONN_USE_PROXY_URL = SOURCE_CONN_PREFIX + "use.proxy.url";
+  public static final String SOURCE_CONN_USE_PROXY_PORT = SOURCE_CONN_PREFIX + "use.proxy.port";
+  public static final String SOURCE_CONN_DRIVER = SOURCE_CONN_PREFIX + "driver";
+  public static final String SOURCE_CONN_PORT = SOURCE_CONN_PREFIX + "port";
   public static final int SOURCE_CONN_DEFAULT_PORT = 22;
+  public static final String SOURCE_CONN_SID = SOURCE_CONN_PREFIX + "sid";
+  public static final String SOURCE_CONN_REFRESH_TOKEN = SOURCE_CONN_PREFIX + "refresh.token";
+
 
   /**
    * Source default configurations.
@@ -424,10 +550,13 @@ public class ConfigurationKeys {
    * Configuration properties used by the Hadoop MR job launcher.
    */
   public static final String MR_JOB_ROOT_DIR_KEY = "mr.job.root.dir";
+  /** Specifies a static location in HDFS to upload jars to. Useful for sharing jars across different Gobblin runs.*/
+  public static final String MR_JARS_DIR = "mr.jars.dir";
   public static final String MR_JOB_MAX_MAPPERS_KEY = "mr.job.max.mappers";
   public static final String MR_REPORT_METRICS_AS_COUNTERS_KEY = "mr.report.metrics.as.counters";
   public static final boolean DEFAULT_MR_REPORT_METRICS_AS_COUNTERS = false;
   public static final int DEFAULT_MR_JOB_MAX_MAPPERS = 100;
+  public static final String DEFAULT_ENABLE_MR_SPECULATIVE_EXECUTION = "false";
 
   /**
    * Configuration properties used by the distributed job launcher.
@@ -456,6 +585,7 @@ public class ConfigurationKeys {
   public static final String DEFAULT_METRICS_ENABLED = Boolean.toString(true);
   public static final String METRICS_REPORT_INTERVAL_KEY = METRICS_CONFIGURATIONS_PREFIX + "report.interval";
   public static final String DEFAULT_METRICS_REPORT_INTERVAL = Long.toString(TimeUnit.SECONDS.toMillis(30));
+  public static final String METRIC_CONTEXT_NAME_KEY = "metrics.context.name";
 
   // File-based reporting
   public static final String METRICS_REPORTING_FILE_ENABLED_KEY =
@@ -474,6 +604,7 @@ public class ConfigurationKeys {
   public static final String METRICS_REPORTING_KAFKA_ENABLED_KEY =
       METRICS_CONFIGURATIONS_PREFIX + "reporting.kafka.enabled";
   public static final String DEFAULT_METRICS_REPORTING_KAFKA_ENABLED = Boolean.toString(false);
+  public static final String DEFAULT_METRICS_REPORTING_KAFKA_REPORTER_CLASS = "gobblin.metrics.kafka.KafkaReporterFactory";
   public static final String METRICS_REPORTING_KAFKA_FORMAT = METRICS_CONFIGURATIONS_PREFIX + "reporting.kafka.format";
   public static final String DEFAULT_METRICS_REPORTING_KAFKA_FORMAT = "json";
   public static final String METRICS_REPORTING_KAFKA_USE_SCHEMA_REGISTRY =
@@ -559,6 +690,11 @@ public class ConfigurationKeys {
   public static final String KAFKA_BROKERS = "kafka.brokers";
   public static final String KAFKA_SOURCE_WORK_UNITS_CREATION_THREADS = "kafka.source.work.units.creation.threads";
   public static final int KAFKA_SOURCE_WORK_UNITS_CREATION_DEFAULT_THREAD_COUNT = 30;
+  public static final String KAFKA_SOURCE_SHARE_CONSUMER_CLIENT = "kafka.source.shareConsumerClient";
+  public static final boolean DEFAULT_KAFKA_SOURCE_SHARE_CONSUMER_CLIENT = false;
+  public static final String KAFKA_SOURCE_AVG_FETCH_TIME_CAP = "kakfa.source.avgFetchTimeCap";
+  public static final int DEFAULT_KAFKA_SOURCE_AVG_FETCH_TIME_CAP = 100;
+
 
   /**
    * Job execution info server and history store configuration properties.
@@ -591,6 +727,12 @@ public class ConfigurationKeys {
   public static final String FS_PROXY_AS_USER_TOKEN_FILE = "fs.proxy.as.user.token.file";
   public static final String SUPER_USER_NAME_TO_PROXY_AS_OTHERS = "super.user.name.to.proxy.as.others";
   public static final String SUPER_USER_KEY_TAB_LOCATION = "super.user.key.tab.location";
+  public static final String TOKEN_AUTH = "TOKEN";
+  public static final String KERBEROS_AUTH = "KERBEROS";
+  public static final String FS_PROXY_AUTH_METHOD = "fs.proxy.auth.method";
+  public static final String DEFAULT_FS_PROXY_AUTH_METHOD = TOKEN_AUTH;
+  public static final String KERBEROS_REALM = "kerberos.realm";
+
 
   /**
    * Azkaban properties.
@@ -607,6 +749,8 @@ public class ConfigurationKeys {
    * Config store properties
    */
   public static final String CONFIG_MANAGEMENT_STORE_URI = "gobblin.config.management.store.uri";
+  public static final String CONFIG_MANAGEMENT_STORE_ENABLED = "gobblin.config.management.store.enabled";
+  public static final String DEFAULT_CONFIG_MANAGEMENT_STORE_ENABLED = "false";
 
   /**
    * Other configuration properties.
@@ -616,4 +760,43 @@ public class ConfigurationKeys {
   public static final String TEST_HARNESS_LAUNCHER_IMPL = "gobblin.testharness.launcher.impl";
   public static final int PERMISSION_PARSING_RADIX = 8;
 
+
+  /**
+   * Configuration properties related to Flows
+   */
+  public static final String FLOW_RUN_IMMEDIATELY = "flow.runImmediately";
+
+  /***
+   * Configuration properties related to Spec Store
+   */
+  public static final String SPECSTORE_FS_DIR_KEY = "specStore.fs.dir";
+
+  /***
+   * Configuration properties related to TopologySpec Store
+   */
+  public static final String TOPOLOGYSPEC_STORE_CLASS_KEY = "topologySpec.store.class";
+  public static final String TOPOLOGYSPEC_STORE_DIR_KEY = "topologySpec.store.dir";
+
+  /***
+   * Configuration properties related to FlowSpec Store
+   */
+  public static final String FLOWSPEC_STORE_CLASS_KEY = "flowSpec.store.class";
+  public static final String FLOWSPEC_STORE_DIR_KEY = "flowSpec.store.dir";
+
+  /***
+   * Configuration properties related to Spec Executor Instance
+   */
+  public static final String SPECEXECUTOR_INSTANCE_URI_KEY = "specExecInstance.uri";
+  public static final String SPECEXECUTOR_INSTANCE_CAPABILITIES_KEY = "specExecInstance.capabilities";
+
+  /***
+   * Configuration properties related to Compaction Suite
+   */
+  public static final String COMPACTION_SUITE_FACTORY = "compaction.suite.factory";
+  public static final String DEFAULT_COMPACTION_SUITE_FACTORY = "CompactionAvroSuiteFactory";
+
+  /**
+   * Configuration related to ConfigStore based copy/retention
+   */
+  public static final String CONFIG_BASED_PREFIX = "gobblin.configBased";
 }

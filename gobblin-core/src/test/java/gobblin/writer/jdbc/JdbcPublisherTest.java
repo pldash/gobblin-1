@@ -1,13 +1,18 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.writer.jdbc;
@@ -83,7 +88,7 @@ public class JdbcPublisherTest {
     inOrder.verify(conn, times(1)).commit();
     inOrder.verify(conn, times(1)).close();
 
-    verify(commands, never()).deleteAll(destinationTable);
+    verify(commands, never()).deleteAll(database, destinationTable);
   }
 
   public void testPublishReplaceOutput() throws IOException, SQLException {
@@ -93,7 +98,7 @@ public class JdbcPublisherTest {
     InOrder inOrder = inOrder(conn, commands, workUnitState);
 
     inOrder.verify(conn, times(1)).setAutoCommit(false);
-    inOrder.verify(commands, times(1)).deleteAll(destinationTable);
+    inOrder.verify(commands, times(1)).deleteAll(database, destinationTable);
     inOrder.verify(commands, times(1)).copyTable(database, stagingTable, destinationTable);
     inOrder.verify(workUnitState, times(1)).setWorkingState(WorkUnitState.WorkingState.COMMITTED);
     inOrder.verify(conn, times(1)).commit();
@@ -119,7 +124,7 @@ public class JdbcPublisherTest {
     inOrder.verify(conn, times(1)).close();
 
     verify(conn, never()).commit();
-    verify(commands, never()).deleteAll(destinationTable);
+    verify(commands, never()).deleteAll(database, destinationTable);
     verify(workUnitState, never()).setWorkingState(any(WorkUnitState.WorkingState.class));
   }
 }

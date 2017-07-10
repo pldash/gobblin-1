@@ -1,25 +1,21 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.source.extractor.extract.jdbc;
-
-import gobblin.source.extractor.DataRecordException;
-import gobblin.source.extractor.exception.HighWatermarkException;
-import gobblin.source.extractor.exception.RecordCountException;
-import gobblin.source.extractor.exception.SchemaException;
-import gobblin.source.extractor.extract.Command;
-import gobblin.source.extractor.utils.Utils;
-import gobblin.source.extractor.watermark.Predicate;
-import gobblin.source.extractor.watermark.WatermarkType;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -35,7 +31,16 @@ import com.google.gson.JsonElement;
 
 import gobblin.configuration.ConfigurationKeys;
 import gobblin.configuration.WorkUnitState;
+import gobblin.source.extractor.DataRecordException;
+import gobblin.source.extractor.exception.HighWatermarkException;
+import gobblin.source.extractor.exception.RecordCountException;
+import gobblin.source.extractor.exception.SchemaException;
+import gobblin.source.extractor.extract.Command;
+import gobblin.source.extractor.utils.Utils;
+import gobblin.source.extractor.watermark.Predicate;
+import gobblin.source.extractor.watermark.WatermarkType;
 import gobblin.source.workunit.WorkUnit;
+
 import lombok.extern.slf4j.Slf4j;
 
 
@@ -80,9 +85,17 @@ public class MysqlExtractor extends JdbcExtractor {
   public List<Command> getSchemaMetadata(String schema, String entity) throws SchemaException {
     log.debug("Build query to get schema");
     List<Command> commands = new ArrayList<>();
-    List<String> queryParams = Arrays.asList(entity, schema);
+    boolean promoteUnsignedInt = this.workUnitState.getPropAsBoolean(
+        ConfigurationKeys.SOURCE_QUERYBASED_PROMOTE_UNSIGNED_INT_TO_BIGINT,
+        ConfigurationKeys.DEFAULT_SOURCE_QUERYBASED_PROMOTE_UNSIGNED_INT_TO_BIGINT);
 
-    String metadataSql = "select " + " col.column_name, " + " col.data_type, "
+    String promoteUnsignedIntQueryParam = promoteUnsignedInt ? "% unsigned" : "dummy";
+
+    List<String> queryParams = Arrays.asList(promoteUnsignedIntQueryParam, entity, schema);
+
+    String metadataSql = "select " + " col.column_name, "
+        + " case when col.column_type like (?) and col.data_type = 'int' then 'bigint' else col.data_type end"
+        + " as data_type,"
         + " case when CHARACTER_OCTET_LENGTH is null then 0 else 0 end as length, "
         + " case when NUMERIC_PRECISION is null then 0 else NUMERIC_PRECISION end as precesion, "
         + " case when NUMERIC_SCALE is null then 0 else NUMERIC_SCALE end as scale, "
@@ -166,15 +179,21 @@ public class MysqlExtractor extends JdbcExtractor {
 
   @Override
   public String getConnectionUrl() {
-    String host = this.workUnit.getProp(ConfigurationKeys.SOURCE_CONN_HOST_NAME);
-    String port = this.workUnit.getProp(ConfigurationKeys.SOURCE_CONN_PORT);
-    String database = this.workUnit.getProp(ConfigurationKeys.SOURCE_QUERYBASED_SCHEMA);
+    String host = this.workUnitState.getProp(ConfigurationKeys.SOURCE_CONN_HOST_NAME);
+    String port = this.workUnitState.getProp(ConfigurationKeys.SOURCE_CONN_PORT);
+    String database = this.workUnitState.getProp(ConfigurationKeys.SOURCE_QUERYBASED_SCHEMA);
     String url = "jdbc:mysql://" + host.trim() + ":" + port + "/" + database.trim();
 
-    if (Boolean.valueOf(this.workUnit.getProp(ConfigurationKeys.SOURCE_QUERYBASED_IS_COMPRESSION_ENABLED))) {
+    if (Boolean.valueOf(this.workUnitState.getProp(ConfigurationKeys.SOURCE_QUERYBASED_IS_COMPRESSION_ENABLED))) {
       return url + "?useCompression=true";
     }
     return url;
+  }
+
+  /** {@inheritdoc} */
+  @Override
+  protected boolean convertBitToBoolean() {
+    return false;
   }
 
   @Override
@@ -251,6 +270,16 @@ public class MysqlExtractor extends JdbcExtractor {
       return " limit " + sampleRowCount;
     }
     return "";
+  }
+
+  @Override
+  public String getLeftDelimitedIdentifier() {
+    return this.enableDelimitedIdentifier ? "`" : "";
+  }
+
+  @Override
+  public String getRightDelimitedIdentifier() {
+    return this.enableDelimitedIdentifier ? "`" : "";
   }
 
   @Override

@@ -1,19 +1,26 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.writer;
 
 import java.io.Closeable;
 import java.io.IOException;
+
+import gobblin.source.extractor.RecordEnvelope;
 
 
 /**
@@ -31,8 +38,9 @@ public interface DataWriter<D> extends Closeable {
    * @param record data record to write
    * @throws IOException if there is anything wrong writing the record
    */
-  public void write(D record)
-      throws IOException;
+  default void write(D record) throws IOException {
+    throw new UnsupportedOperationException();
+  }
 
   /**
    * Commit the data written.
@@ -64,4 +72,12 @@ public interface DataWriter<D> extends Closeable {
    */
   public long bytesWritten()
       throws IOException;
+
+  /**
+   * Write the input {@link RecordEnvelope}. By default, just call {@link #write(Object)}.
+   */
+  default void writeEnvelope(RecordEnvelope<D> recordEnvelope) throws IOException {
+    write(recordEnvelope.getRecord());
+    recordEnvelope.ack();
+  }
 }

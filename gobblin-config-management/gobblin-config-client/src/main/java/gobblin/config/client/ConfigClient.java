@@ -1,13 +1,18 @@
 /*
- * Copyright (C) 2015 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.config.client;
@@ -25,6 +30,7 @@ import java.util.TreeMap;
 import org.apache.log4j.Logger;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Optional;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.Multimap;
 import com.typesafe.config.Config;
@@ -47,8 +53,8 @@ import gobblin.config.store.api.VersionDoesNotExistException;
 
 /**
  * This class is used by Client to access the Configuration Management core library.
- * 
- * 
+ *
+ *
  * @author mitu
  *
  */
@@ -58,17 +64,17 @@ public class ConfigClient {
   private final VersionStabilityPolicy policy;
 
   /** Normally key is the ConfigStore.getStoreURI(), value is the ConfigStoreAccessor
-   *  
+   *
    * However, there may be two entries for a specific config store, for example
    * if user pass in URI like "etl-hdfs:///datasets/a1/a2" and the etl-hdfs config store factory using
    * default authority/default config store root normalized the URI to
    * "etl-hdfs://eat1-nertznn01.grid.linkedin.com:9000/user/mitu/HdfsBasedConfigTest/datasets/a1/a2"
    * where /user/mitu/HdfsBasedConfigTest is the config store root
-   * 
+   *
    * Then there will be two entries in the Map which point to the same value
    * key1: "etl-hdfs:/"
    * key2: "etl-hdfs://eat1-nertznn01.grid.linkedin.com:9000/user/mitu/HdfsBasedConfigTest/"
-   * 
+   *
    */
   private final TreeMap<URI, ConfigStoreAccessor> configStoreAccessorMap = new TreeMap<>();
 
@@ -86,8 +92,8 @@ public class ConfigClient {
   }
 
   /**
-   * Create the {@link ConfigClient} based on the {@link VersionStabilityPolicy}. 
-   * @param policy - {@link VersionStabilityPolicy} to specify the stability policy which control the caching layer creation 
+   * Create the {@link ConfigClient} based on the {@link VersionStabilityPolicy}.
+   * @param policy - {@link VersionStabilityPolicy} to specify the stability policy which control the caching layer creation
    * @return       - {@link ConfigClient} for client to use to access the {@link ConfigStore}
    */
   public static ConfigClient createConfigClient(VersionStabilityPolicy policy) {
@@ -96,24 +102,29 @@ public class ConfigClient {
 
   /**
    * Get the resolved {@link Config} based on the input URI.
-   * 
+   *
    * @param configKeyUri - The URI for the configuration key. There are two types of URI:
-   * 
+   *
    * 1. URI missing authority and configuration store root , for example "etl-hdfs:///datasets/a1/a2". It will get
    *    the configuration based on the default {@link ConfigStore} in etl-hdfs {@link ConfigStoreFactory}
    * 2. Complete URI:  for example "etl-hdfs://eat1-nertznn01.grid.linkedin.com:9000/user/mitu/HdfsBasedConfigTest/"
-   * 
+   *
    * @return  the resolved {@link Config} based on the input URI.
-   * 
+   *
    * @throws ConfigStoreFactoryDoesNotExistsException: if missing scheme name or the scheme name is invalid
    * @throws ConfigStoreCreationException: Specified {@link ConfigStoreFactory} can not create required {@link ConfigStore}
    * @throws VersionDoesNotExistException: Required version does not exist anymore ( may get deleted by retention job )
    */
   public Config getConfig(URI configKeyUri)
       throws ConfigStoreFactoryDoesNotExistsException, ConfigStoreCreationException, VersionDoesNotExistException {
+    return getConfig(configKeyUri, Optional.<Config>absent());
+  }
+
+  public Config getConfig(URI configKeyUri, Optional<Config> runtimeConfig)
+      throws ConfigStoreFactoryDoesNotExistsException, ConfigStoreCreationException, VersionDoesNotExistException {
     ConfigStoreAccessor accessor = this.getConfigStoreAccessor(configKeyUri);
     ConfigKeyPath configKeypath = ConfigClientUtils.buildConfigKeyPath(configKeyUri, accessor.configStore);
-    return accessor.valueInspector.getResolvedConfig(configKeypath);
+    return accessor.valueInspector.getResolvedConfig(configKeypath, runtimeConfig);
   }
 
   /**
@@ -135,7 +146,7 @@ public class ConfigClient {
     // map contains the mapping between ConfigKeyPath back to original URI , partitioned by ConfigStoreAccessor
     Map<ConfigStoreAccessor, Map<ConfigKeyPath, URI>> reverseMap = new HashMap<>();
 
-    // partitioned the ConfigKeyPaths which belongs to the same store to one accessor 
+    // partitioned the ConfigKeyPaths which belongs to the same store to one accessor
     for (URI u : configKeyUris) {
       ConfigStoreAccessor accessor = this.getConfigStoreAccessor(u);
       ConfigKeyPath configKeypath = ConfigClientUtils.buildConfigKeyPath(u, accessor.configStore);
@@ -165,8 +176,15 @@ public class ConfigClient {
    */
   public Config getConfig(String configKeyStr) throws ConfigStoreFactoryDoesNotExistsException,
       ConfigStoreCreationException, VersionDoesNotExistException, URISyntaxException {
-    return this.getConfig(new URI(configKeyStr));
+    return getConfig(configKeyStr, Optional.<Config>absent());
   }
+
+  public Config getConfig(String configKeyStr, Optional<Config> runtimeConfig)
+      throws ConfigStoreFactoryDoesNotExistsException, ConfigStoreCreationException, VersionDoesNotExistException,
+             URISyntaxException {
+    return this.getConfig(new URI(configKeyStr), runtimeConfig);
+  }
+
 
   /**
    * batch process for {@link #getConfig(String)} method
@@ -192,25 +210,30 @@ public class ConfigClient {
 
   /**
    * Get the import links of the input URI.
-   * 
-   * @param configKeyUri - The URI for the configuration key. 
+   *
+   * @param configKeyUri - The URI for the configuration key.
    * @param recursive    - Specify whether to get direct import links or recursively import links
    * @return  the import links of the input URI.
-   * 
+   *
    * @throws ConfigStoreFactoryDoesNotExistsException: if missing scheme name or the scheme name is invalid
    * @throws ConfigStoreCreationException: Specified {@link ConfigStoreFactory} can not create required {@link ConfigStore}
    * @throws VersionDoesNotExistException: Required version does not exist anymore ( may get deleted by retention job )
    */
   public Collection<URI> getImports(URI configKeyUri, boolean recursive)
       throws ConfigStoreFactoryDoesNotExistsException, ConfigStoreCreationException, VersionDoesNotExistException {
+    return getImports(configKeyUri, recursive, Optional.<Config>absent());
+  }
+
+  public Collection<URI> getImports(URI configKeyUri, boolean recursive, Optional<Config> runtimeConfig)
+      throws ConfigStoreFactoryDoesNotExistsException, ConfigStoreCreationException, VersionDoesNotExistException {
     ConfigStoreAccessor accessor = this.getConfigStoreAccessor(configKeyUri);
     ConfigKeyPath configKeypath = ConfigClientUtils.buildConfigKeyPath(configKeyUri, accessor.configStore);
     Collection<ConfigKeyPath> result;
 
     if (!recursive) {
-      result = accessor.topologyInspector.getOwnImports(configKeypath);
+      result = accessor.topologyInspector.getOwnImports(configKeypath, runtimeConfig);
     } else {
-      result = accessor.topologyInspector.getImportsRecursively(configKeypath);
+      result = accessor.topologyInspector.getImportsRecursively(configKeypath, runtimeConfig);
     }
 
     return ConfigClientUtils.buildUriInClientFormat(result, accessor.configStore, configKeyUri.getAuthority() != null);
@@ -218,25 +241,30 @@ public class ConfigClient {
 
   /**
    * Get the URIs which imports the input URI
-   * 
-   * @param configKeyUri - The URI for the configuration key. 
+   *
+   * @param configKeyUri - The URI for the configuration key.
    * @param recursive    - Specify whether to get direct or recursively imported by links
    * @return  the URIs which imports the input URI
-   * 
+   *
    * @throws ConfigStoreFactoryDoesNotExistsException: if missing scheme name or the scheme name is invalid
    * @throws ConfigStoreCreationException: Specified {@link ConfigStoreFactory} can not create required {@link ConfigStore}
    * @throws VersionDoesNotExistException: Required version does not exist anymore ( may get deleted by retention job )
    */
   public Collection<URI> getImportedBy(URI configKeyUri, boolean recursive)
       throws ConfigStoreFactoryDoesNotExistsException, ConfigStoreCreationException, VersionDoesNotExistException {
+    return getImportedBy(configKeyUri, recursive, Optional.<Config>absent());
+  }
+
+  public Collection<URI> getImportedBy(URI configKeyUri, boolean recursive, Optional<Config> runtimeConfig)
+      throws ConfigStoreFactoryDoesNotExistsException, ConfigStoreCreationException, VersionDoesNotExistException {
     ConfigStoreAccessor accessor = this.getConfigStoreAccessor(configKeyUri);
     ConfigKeyPath configKeypath = ConfigClientUtils.buildConfigKeyPath(configKeyUri, accessor.configStore);
     Collection<ConfigKeyPath> result;
 
     if (!recursive) {
-      result = accessor.topologyInspector.getImportedBy(configKeypath);
+      result = accessor.topologyInspector.getImportedBy(configKeypath, runtimeConfig);
     } else {
-      result = accessor.topologyInspector.getImportedByRecursively(configKeypath);
+      result = accessor.topologyInspector.getImportedByRecursively(configKeypath, runtimeConfig);
     }
 
     return ConfigClientUtils.buildUriInClientFormat(result, accessor.configStore, configKeyUri.getAuthority() != null);
@@ -273,6 +301,7 @@ public class ConfigClient {
     }
 
     String currentVersion = cs.getCurrentVersion();
+    LOG.info("Current config store version number: " + currentVersion);
     // topology related
     ConfigStoreBackedTopology csTopology = new ConfigStoreBackedTopology(cs, currentVersion);
     InMemoryTopology inMemoryTopology = new InMemoryTopology(csTopology);
@@ -322,7 +351,7 @@ public class ConfigClient {
     result = createNewConfigStoreAccessor(configKeyURI);
     ConfigStore cs = result.configStore;
 
-    // put default root URI in cache as well for the URI which missing authority 
+    // put default root URI in cache as well for the URI which missing authority
     if (configKeyURI.getAuthority() == null) {
       // configKeyURI is missing authority/configstore root "etl-hdfs:///datasets/a1/a2"
       try {

@@ -1,13 +1,18 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.runtime;
@@ -45,12 +50,13 @@ import lombok.extern.slf4j.Slf4j;
 public class JobContextTest {
 
   @Test
-  public void testNonParallelCommit() throws Exception {
+  public void testNonParallelCommit()
+      throws Exception {
 
     Properties jobProps = new Properties();
 
     jobProps.setProperty(ConfigurationKeys.JOB_NAME_KEY, "test");
-    jobProps.setProperty(ConfigurationKeys.JOB_ID_KEY, "id");
+    jobProps.setProperty(ConfigurationKeys.JOB_ID_KEY, "job_id_12345");
     jobProps.setProperty(ConfigurationKeys.METRICS_ENABLED_KEY, "false");
 
     Map<String, JobState.DatasetState> datasetStateMap = Maps.newHashMap();
@@ -60,12 +66,13 @@ public class JobContextTest {
 
     final BlockingQueue<ControllableCallable<Void>> callables = Queues.newLinkedBlockingQueue();
 
-    final JobContext jobContext = new ControllableCommitJobContext(jobProps, log, datasetStateMap, new Predicate<String>() {
-      @Override
-      public boolean apply(@Nullable String input) {
-        return true;
-      }
-    }, callables);
+    final JobContext jobContext =
+        new ControllableCommitJobContext(jobProps, log, datasetStateMap, new Predicate<String>() {
+          @Override
+          public boolean apply(@Nullable String input) {
+            return true;
+          }
+        }, callables);
 
     ExecutorService executorService = Executors.newSingleThreadExecutor();
     Future future = executorService.submit(new Runnable() {
@@ -98,12 +105,13 @@ public class JobContextTest {
   }
 
   @Test
-  public void testParallelCommit() throws Exception {
+  public void testParallelCommit()
+      throws Exception {
 
     Properties jobProps = new Properties();
 
     jobProps.setProperty(ConfigurationKeys.JOB_NAME_KEY, "test");
-    jobProps.setProperty(ConfigurationKeys.JOB_ID_KEY, "id");
+    jobProps.setProperty(ConfigurationKeys.JOB_ID_KEY, "job_id_12345");
     jobProps.setProperty(ConfigurationKeys.METRICS_ENABLED_KEY, "false");
     jobProps.setProperty(ConfigurationKeys.PARALLELIZE_DATASET_COMMIT, "true");
 
@@ -114,12 +122,13 @@ public class JobContextTest {
 
     final BlockingQueue<ControllableCallable<Void>> callables = Queues.newLinkedBlockingQueue();
 
-    final JobContext jobContext = new ControllableCommitJobContext(jobProps, log, datasetStateMap, new Predicate<String>() {
-      @Override
-      public boolean apply(@Nullable String input) {
-        return true;
-      }
-    }, callables);
+    final JobContext jobContext =
+        new ControllableCommitJobContext(jobProps, log, datasetStateMap, new Predicate<String>() {
+          @Override
+          public boolean apply(@Nullable String input) {
+            return true;
+          }
+        }, callables);
 
     ExecutorService executorService = Executors.newSingleThreadExecutor();
     Future future = executorService.submit(new Runnable() {
@@ -152,12 +161,13 @@ public class JobContextTest {
   }
 
   @Test
-  public void testSingleExceptionSemantics() throws Exception {
+  public void testSingleExceptionSemantics()
+      throws Exception {
 
     Properties jobProps = new Properties();
 
     jobProps.setProperty(ConfigurationKeys.JOB_NAME_KEY, "test");
-    jobProps.setProperty(ConfigurationKeys.JOB_ID_KEY, "id");
+    jobProps.setProperty(ConfigurationKeys.JOB_ID_KEY, "job_id_12345");
     jobProps.setProperty(ConfigurationKeys.METRICS_ENABLED_KEY, "false");
 
     Map<String, JobState.DatasetState> datasetStateMap = Maps.newHashMap();
@@ -168,12 +178,13 @@ public class JobContextTest {
     final BlockingQueue<ControllableCallable<Void>> callables = Queues.newLinkedBlockingQueue();
 
     // There are three datasets, "0", "1", and "2", middle one will fail
-    final JobContext jobContext = new ControllableCommitJobContext(jobProps, log, datasetStateMap, new Predicate<String>() {
-      @Override
-      public boolean apply(@Nullable String input) {
-        return !input.equals("1");
-      }
-    }, callables);
+    final JobContext jobContext =
+        new ControllableCommitJobContext(jobProps, log, datasetStateMap, new Predicate<String>() {
+          @Override
+          public boolean apply(@Nullable String input) {
+            return !input.equals("1");
+          }
+        }, callables);
 
     ExecutorService executorService = Executors.newSingleThreadExecutor();
     Future future = executorService.submit(new Runnable() {
@@ -252,7 +263,7 @@ public class JobContextTest {
     }
 
     @Override
-    protected Callable<Void> createSafeDatasetCommit(boolean shouldCommitDataInJob,
+    protected Callable<Void> createSafeDatasetCommit(boolean shouldCommitDataInJob, boolean isJobCancelled,
         DeliverySemantics deliverySemantics, String datasetUrn, JobState.DatasetState datasetState,
         boolean isMultithreaded, JobContext jobContext) {
       ControllableCallable<Void> callable;

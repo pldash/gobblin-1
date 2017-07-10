@@ -1,18 +1,24 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.source.extractor.hadoop;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
@@ -22,24 +28,33 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.compress.CompressionCodec;
+import org.apache.hadoop.io.compress.CompressionCodecFactory;
+
 import com.google.common.base.Strings;
+
 import gobblin.configuration.ConfigurationKeys;
 import gobblin.configuration.State;
 import gobblin.source.extractor.filebased.FileBasedHelper;
 import gobblin.source.extractor.filebased.FileBasedHelperException;
 import gobblin.source.extractor.filebased.TimestampAwareFileBasedHelper;
+import gobblin.util.HadoopUtils;
 import gobblin.util.ProxiedFileSystemWrapper;
 
 
 /**
  * A common helper that extends {@link FileBasedHelper} and provides access to a files via a {@link FileSystem}.
  */
-public abstract class HadoopFsHelper implements TimestampAwareFileBasedHelper {
+public class HadoopFsHelper implements TimestampAwareFileBasedHelper {
   private final State state;
   private final Configuration configuration;
   private FileSystem fs;
 
-  protected HadoopFsHelper(State state, Configuration configuration) {
+  public HadoopFsHelper(State state) {
+    this(state, HadoopUtils.getConfFromState(state));
+  }
+
+  public HadoopFsHelper(State state, Configuration configuration) {
     this.state = state;
     this.configuration = configuration;
   }
@@ -102,11 +117,11 @@ public abstract class HadoopFsHelper implements TimestampAwareFileBasedHelper {
         ConfigurationKeys.DEFAULT_SHOULD_FS_PROXY_AS_USER)) {
       // Initialize file system as a proxy user.
       this.fs = new ProxiedFileSystemWrapper().getProxiedFileSystem(this.state, ProxiedFileSystemWrapper.AuthType.TOKEN,
-          this.state.getProp(ConfigurationKeys.FS_PROXY_AS_USER_TOKEN_FILE), uri);
+          this.state.getProp(ConfigurationKeys.FS_PROXY_AS_USER_TOKEN_FILE), uri, configuration);
 
     } else {
       // Initialize file system as the current user.
-      this.fs = FileSystem.get(URI.create(uri), this.configuration);
+      this.fs = FileSystem.newInstance(URI.create(uri), this.configuration);
     }
   }
 
@@ -118,5 +133,45 @@ public abstract class HadoopFsHelper implements TimestampAwareFileBasedHelper {
       throw new FileBasedHelperException(String
           .format("Failed to get last modified time for file at path %s due to error %s", filePath, e.getMessage()), e);
     }
+  }
+
+  @Override
+  public long getFileSize(String filePath) throws FileBasedHelperException {
+    try {
+      return this.getFileSystem().getFileStatus(new Path(filePath)).getLen();
+    } catch (IOException e) {
+      throw new FileBasedHelperException(
+          String.format("Failed to get size for file at path %s due to error %s", filePath, e.getMessage()), e);
+    }
+  }
+
+  /**
+   * Returns an {@link InputStream} to the specified file.
+   * <p>
+   * Note: It is the caller's responsibility to close the returned {@link InputStream}.
+   * </p>
+   *
+   * @param path The path to the file to open.
+   * @return An {@link InputStream} for the specified file.
+   * @throws FileBasedHelperException if there is a problem opening the {@link InputStream} for the specified file.
+   */
+  @Override
+  public InputStream getFileStream(String path) throws FileBasedHelperException {
+    try {
+      Path p = new Path(path);
+      InputStream in = this.getFileSystem().open(p);
+      // Account for compressed files (e.g. gzip).
+      // https://github.com/apache/spark/blob/master/core/src/main/scala/org/apache/spark/input/WholeTextFileRecordReader.scala
+      CompressionCodecFactory factory = new CompressionCodecFactory(this.getFileSystem().getConf());
+      CompressionCodec codec = factory.getCodec(p);
+      return (codec == null) ? in : codec.createInputStream(in);
+    } catch (IOException e) {
+      throw new FileBasedHelperException("Cannot open file " + path + " due to " + e.getMessage(), e);
+    }
+  }
+
+  @Override
+  public void close() throws IOException {
+    this.getFileSystem().close();
   }
 }

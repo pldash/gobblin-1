@@ -1,13 +1,18 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.writer.partitioner;
@@ -28,6 +33,7 @@ import org.testng.annotations.Test;
 
 import gobblin.configuration.ConfigurationKeys;
 import gobblin.configuration.State;
+import gobblin.source.extractor.RecordEnvelope;
 import gobblin.writer.AvroDataWriterBuilder;
 import gobblin.writer.DataWriter;
 import gobblin.writer.DataWriterBuilder;
@@ -106,15 +112,15 @@ public class TimeBasedAvroWriterPartitionerTest {
 
     // This timestamp corresponds to 2015/01/01
     genericRecordBuilder.set("timestamp", 1420099200000l);
-    this.writer.write(genericRecordBuilder.build());
+    this.writer.writeEnvelope(new RecordEnvelope<>(genericRecordBuilder.build()));
 
     // This timestamp corresponds to 2015/01/02
     genericRecordBuilder.set("timestamp", 1420185600000l);
-    this.writer.write(genericRecordBuilder.build());
+    this.writer.writeEnvelope(new RecordEnvelope<>(genericRecordBuilder.build()));
 
     // This timestamp corresponds to 2015/01/03
     genericRecordBuilder.set("timestamp", 1420272000000l);
-    this.writer.write(genericRecordBuilder.build());
+    this.writer.writeEnvelope(new RecordEnvelope<>(genericRecordBuilder.build()));
 
     // Check that the writer reports that 3 records have been written
     Assert.assertEquals(this.writer.recordsWritten(), 3);

@@ -1,13 +1,18 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.metastore.util;
@@ -40,12 +45,14 @@ import com.google.common.io.Closer;
 import com.google.common.io.Files;
 
 import gobblin.configuration.ConfigurationKeys;
+import gobblin.metastore.nameParser.GuidDatasetUrnStateStoreNameParser;
 import gobblin.util.ExecutorsUtils;
 
 
 /**
  * A utility class for cleaning up old state store files created by {@link gobblin.metastore.FsStateStore}
  * based on a configured retention.
+ * @deprecated Please use Gobblin-retention instead: http://gobblin.readthedocs.io/en/latest/data-management/Gobblin-Retention/.
  *
  * @author Yinan Li
  */
@@ -66,24 +73,25 @@ public class StateStoreCleaner implements Closeable {
   private final ExecutorService cleanerRunnerExecutor;
   private final FileSystem fs;
 
-  public StateStoreCleaner(Properties properties) throws IOException {
+  public StateStoreCleaner(Properties properties)
+      throws IOException {
     Preconditions.checkArgument(properties.containsKey(ConfigurationKeys.STATE_STORE_ROOT_DIR_KEY),
         "Missing configuration property for the state store root directory: "
             + ConfigurationKeys.STATE_STORE_ROOT_DIR_KEY);
 
     this.stateStoreRootDir = new Path(properties.getProperty(ConfigurationKeys.STATE_STORE_ROOT_DIR_KEY));
-    this.retention = Long.parseLong(properties.getProperty(
-        STATE_STORE_CLEANER_RETENTION_KEY, DEFAULT_STATE_STORE_CLEANER_RETENTION));
-    this.retentionTimeUnit = TimeUnit.valueOf(properties.getProperty(STATE_STORE_CLEANER_RETENTION_TIMEUNIT_KEY,
-        DEFAULT_STATE_STORE_CLEANER_RETENTION_TIMEUNIT).toUpperCase());
+    this.retention = Long.parseLong(
+        properties.getProperty(STATE_STORE_CLEANER_RETENTION_KEY, DEFAULT_STATE_STORE_CLEANER_RETENTION));
+    this.retentionTimeUnit = TimeUnit.valueOf(properties
+        .getProperty(STATE_STORE_CLEANER_RETENTION_TIMEUNIT_KEY, DEFAULT_STATE_STORE_CLEANER_RETENTION_TIMEUNIT)
+        .toUpperCase());
 
-    this.cleanerRunnerExecutor = Executors.newFixedThreadPool(
-        Integer.parseInt(properties.getProperty(
-            STATE_STORE_CLEANER_EXECUTOR_THREADS_KEY, DEFAULT_STATE_STORE_CLEANER_EXECUTOR_THREADS)),
+    this.cleanerRunnerExecutor = Executors.newFixedThreadPool(Integer.parseInt(properties
+            .getProperty(STATE_STORE_CLEANER_EXECUTOR_THREADS_KEY, DEFAULT_STATE_STORE_CLEANER_EXECUTOR_THREADS)),
         ExecutorsUtils.newThreadFactory(Optional.of(LOGGER), Optional.of("StateStoreCleaner")));
 
-    URI fsUri = URI.create(properties.getProperty(
-        ConfigurationKeys.STATE_STORE_FS_URI_KEY, ConfigurationKeys.LOCAL_FS_URI));
+    URI fsUri =
+        URI.create(properties.getProperty(ConfigurationKeys.STATE_STORE_FS_URI_KEY, ConfigurationKeys.LOCAL_FS_URI));
     this.fs = FileSystem.get(fsUri, new Configuration());
   }
 
@@ -91,7 +99,8 @@ public class StateStoreCleaner implements Closeable {
    * Run the cleaner.
    * @throws ExecutionException
    */
-  public void run() throws IOException, ExecutionException {
+  public void run()
+      throws IOException, ExecutionException {
     FileStatus[] stateStoreDirs = this.fs.listStatus(this.stateStoreRootDir);
     if (stateStoreDirs == null || stateStoreDirs.length == 0) {
       LOGGER.warn("The state store root directory does not exist or is empty");
@@ -101,8 +110,8 @@ public class StateStoreCleaner implements Closeable {
     List<Future<?>> futures = Lists.newArrayList();
 
     for (FileStatus stateStoreDir : stateStoreDirs) {
-      futures.add(this.cleanerRunnerExecutor.submit(new CleanerRunner(this.fs, stateStoreDir.getPath(), this.retention,
-          this.retentionTimeUnit)));
+      futures.add(this.cleanerRunnerExecutor
+          .submit(new CleanerRunner(this.fs, stateStoreDir.getPath(), this.retention, this.retentionTimeUnit)));
     }
 
     for (Future<?> future : futures) {
@@ -117,7 +126,8 @@ public class StateStoreCleaner implements Closeable {
   }
 
   @Override
-  public void close() throws IOException {
+  public void close()
+      throws IOException {
     this.cleanerRunnerExecutor.shutdown();
   }
 
@@ -125,8 +135,14 @@ public class StateStoreCleaner implements Closeable {
 
     @Override
     public boolean accept(Path path) {
-      String extension = Files.getFileExtension(path.getName());
-      return extension.equalsIgnoreCase("jst") || extension.equalsIgnoreCase("tst");
+      String fileName = path.getName();
+      String extension = Files.getFileExtension(fileName);
+      return isStateMetaFile(fileName) || extension.equalsIgnoreCase("jst") || extension.equalsIgnoreCase("tst");
+    }
+
+    boolean isStateMetaFile(String fileName) {
+      return fileName.startsWith(GuidDatasetUrnStateStoreNameParser.StateStoreNameVersion.V1.getDatasetUrnNameMapFile())
+          && !fileName.equals(GuidDatasetUrnStateStoreNameParser.StateStoreNameVersion.V1.getDatasetUrnNameMapFile());
     }
   }
 
@@ -172,7 +188,8 @@ public class StateStoreCleaner implements Closeable {
     }
   }
 
-  public static void main(String[] args) throws IOException {
+  public static void main(String[] args)
+      throws IOException {
     if (args.length != 1) {
       System.err.println("Usage: " + StateStoreCleaner.class.getSimpleName() + " <configuration file>");
       System.exit(1);

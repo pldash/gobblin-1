@@ -1,13 +1,18 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.data.management.trash;
@@ -32,8 +37,6 @@ import org.joda.time.format.DateTimeFormat;
 import org.joda.time.format.DateTimeFormatter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import azkaban.utils.Props;
 
 import gobblin.util.PathUtils;
 
@@ -122,23 +125,11 @@ public class Trash implements GobblinTrash {
               TRASH_IDENTIFIER_FILE, trashLocation));
         }
       }
-    } else if (!(fs.mkdirs(trashLocation.getParent(), ALL_PERM) && fs.mkdirs(trashLocation, PERM)
+    } else if (!(safeFsMkdir(fs, trashLocation.getParent(), ALL_PERM) && safeFsMkdir(fs, trashLocation, PERM)
         && fs.createNewFile(new Path(trashLocation, TRASH_IDENTIFIER_FILE)))) {
       // Failed to create directory or create trash identifier file.
       throw new IOException("Failed to create trash directory at " + trashLocation.toString());
     }
-  }
-
-  /**
-   * Move a path to trash. The absolute path of the input path will be replicated under the trash directory.
-   * @param fs {@link org.apache.hadoop.fs.FileSystem} where path and trash exist.
-   * @param path {@link org.apache.hadoop.fs.FileSystem} path to move to trash.
-   * @param props {@link java.util.Properties} containing trash configuration.
-   * @return true if move to trash was done successfully.
-   * @throws IOException
-   */
-  public static boolean moveToTrash(FileSystem fs, Path path, Props props) throws IOException {
-    return TrashFactory.createTrash(fs, props.toProperties()).moveToTrash(path);
   }
 
   protected final FileSystem fs;
@@ -151,14 +142,6 @@ public class Trash implements GobblinTrash {
   @Deprecated
   public Trash(FileSystem fs) throws IOException {
     this(fs, new Properties());
-  }
-
-  /**
-   * @deprecated Use {@link gobblin.data.management.trash.TrashFactory}.
-   */
-  @Deprecated
-  public Trash(FileSystem fs, Props props) throws IOException {
-    this(fs, props.toProperties());
   }
 
   /**
@@ -190,6 +173,7 @@ public class Trash implements GobblinTrash {
    * @return true if move to trash was done successfully.
    * @throws IOException
    */
+  @Override
   public boolean moveToTrash(Path path) throws IOException {
     Path fullyResolvedPath = path.isAbsolute() ? path : new Path(this.fs.getWorkingDirectory(), path);
     Path targetPathInTrash = PathUtils.mergePaths(this.trashLocation, fullyResolvedPath);
@@ -220,7 +204,7 @@ public class Trash implements GobblinTrash {
       throw new IOException("New snapshot directory " + snapshotDir.toString() + " already exists.");
     }
 
-    if (!this.fs.mkdirs(snapshotDir, PERM)) {
+    if (!safeFsMkdir(fs, snapshotDir, PERM)) {
       throw new IOException("Failed to create new snapshot directory at " + snapshotDir.toString());
     }
 
@@ -296,4 +280,22 @@ public class Trash implements GobblinTrash {
     LOG.info(String.format("Deleted %d out of %d existing snapshots.", snapshotsDeleted, totalSnapshots));
   }
 
+  /**
+   * Safe creation of trash folder to ensure thread-safe.
+   * @throws IOException
+   */
+  private boolean safeFsMkdir(FileSystem fs, Path f, FsPermission permission) throws IOException {
+    try {
+      return fs.mkdirs(f, permission);
+    } catch (IOException e) {
+      // To handle the case when trash folder is created by other threads
+      // The case is rare and we don't put synchronized keywords for performance consideration.
+      if (!fs.exists(f)) {
+        throw new IOException("Failed to create trash folder while it is still not existed yet.");
+      } else {
+        LOG.debug("Target folder %s has been created by other threads.", f.toString());
+        return true;
+      }
+    }
+  }
 }

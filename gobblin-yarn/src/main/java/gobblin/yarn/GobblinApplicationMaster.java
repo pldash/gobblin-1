@@ -1,16 +1,24 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.yarn;
+
+import java.util.Collections;
+import java.util.List;
 
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.DefaultParser;
@@ -19,6 +27,7 @@ import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
 
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.yarn.api.ApplicationConstants;
 import org.apache.hadoop.yarn.api.records.ContainerId;
@@ -34,12 +43,14 @@ import org.apache.helix.model.Message;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.google.common.base.Optional;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 
 import gobblin.annotation.Alpha;
 import gobblin.cluster.GobblinClusterConfigurationKeys;
 import gobblin.cluster.GobblinClusterManager;
+import gobblin.util.JvmUtils;
 import gobblin.util.logs.Log4jConfigurationHelper;
 import gobblin.yarn.event.DelegationTokenUpdatedEvent;
 
@@ -61,7 +72,8 @@ public class GobblinApplicationMaster extends GobblinClusterManager {
 
   public GobblinApplicationMaster(String applicationName, ContainerId containerId, Config config,
       YarnConfiguration yarnConfiguration) throws Exception {
-    super(applicationName, containerId.getApplicationAttemptId().getApplicationId().toString(), config);
+    super(applicationName, containerId.getApplicationAttemptId().getApplicationId().toString(), config,
+        Optional.<Path>absent());
 
     GobblinYarnLogSource gobblinYarnLogSource = new GobblinYarnLogSource();
     if (gobblinYarnLogSource.isLogSourcePresent()) {
@@ -113,6 +125,10 @@ public class GobblinApplicationMaster extends GobblinClusterManager {
     @Override
     public String getMessageType() {
       return Message.MessageType.USER_DEFINE_MSG.toString();
+    }
+
+    public List<String> getMessageTypes() {
+      return Collections.singletonList(getMessageType());
     }
 
     @Override
@@ -185,6 +201,8 @@ public class GobblinApplicationMaster extends GobblinClusterManager {
       Log4jConfigurationHelper.updateLog4jConfiguration(GobblinApplicationMaster.class,
           GobblinYarnConfigurationKeys.GOBBLIN_YARN_LOG4J_CONFIGURATION_FILE,
           GobblinYarnConfigurationKeys.GOBBLIN_YARN_LOG4J_CONFIGURATION_FILE);
+
+      LOGGER.info(JvmUtils.getJvmInputArguments());
 
       ContainerId containerId =
           ConverterUtils.toContainerId(System.getenv().get(ApplicationConstants.Environment.CONTAINER_ID.key()));

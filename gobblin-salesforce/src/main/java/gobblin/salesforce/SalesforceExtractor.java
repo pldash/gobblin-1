@@ -1,13 +1,18 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.salesforce;
@@ -313,7 +318,7 @@ public class SalesforceExtractor extends RestApiExtractor {
 
     try {
       if (isNullPredicate(predicateList)) {
-        log.info("QUERY: " + query);
+        log.info("QUERY with null predicate: " + query);
         return constructGetCommand(this.sfConnector.getFullUri(getSoqlUrl(query)));
       }
       Iterator<Predicate> i = predicateList.listIterator();
@@ -377,7 +382,7 @@ public class SalesforceExtractor extends RestApiExtractor {
           query = SqlQueryUtils.addPredicate(query, predicate.getCondition());
         }
 
-        if (Boolean.valueOf(this.workUnit.getProp(ConfigurationKeys.SOURCE_QUERYBASED_IS_SPECIFIC_API_ACTIVE))) {
+        if (Boolean.valueOf(this.workUnitState.getProp(ConfigurationKeys.SOURCE_QUERYBASED_IS_SPECIFIC_API_ACTIVE))) {
           query = SqlQueryUtils.addPredicate(query, "IsDeleted = true");
         }
 
@@ -448,7 +453,7 @@ public class SalesforceExtractor extends RestApiExtractor {
     return this.nextUrl;
   }
 
-  private static String getSoqlUrl(String soqlQuery) throws RestApiClientException {
+  public static String getSoqlUrl(String soqlQuery) throws RestApiClientException {
     String path = SOQL_RESOURCE + "/";
     NameValuePair pair = new BasicNameValuePair("q", soqlQuery);
     List<NameValuePair> qparams = new ArrayList<>();
@@ -586,8 +591,8 @@ public class SalesforceExtractor extends RestApiExtractor {
   public boolean bulkApiLogin() throws Exception {
     log.info("Authenticating salesforce bulk api");
     boolean success = false;
-    String hostName = this.workUnit.getProp(ConfigurationKeys.SOURCE_CONN_HOST_NAME);
-    String apiVersion = this.workUnit.getProp(ConfigurationKeys.SOURCE_CONN_VERSION);
+    String hostName = this.workUnitState.getProp(ConfigurationKeys.SOURCE_CONN_HOST_NAME);
+    String apiVersion = this.workUnitState.getProp(ConfigurationKeys.SOURCE_CONN_VERSION);
     if (Strings.isNullOrEmpty(apiVersion)) {
       apiVersion = "29.0";
     }
@@ -601,10 +606,10 @@ public class SalesforceExtractor extends RestApiExtractor {
             super.workUnitState.getPropAsInt(ConfigurationKeys.SOURCE_CONN_USE_PROXY_PORT));
       }
 
-      String securityToken = this.workUnit.getProp(ConfigurationKeys.SOURCE_CONN_SECURITY_TOKEN);
-      String password = PasswordManager.getInstance(this.workUnit)
-          .readPassword(this.workUnit.getProp(ConfigurationKeys.SOURCE_CONN_PASSWORD));
-      partnerConfig.setUsername(this.workUnit.getProp(ConfigurationKeys.SOURCE_CONN_USERNAME));
+      String securityToken = this.workUnitState.getProp(ConfigurationKeys.SOURCE_CONN_SECURITY_TOKEN);
+      String password = PasswordManager.getInstance(this.workUnitState)
+          .readPassword(this.workUnitState.getProp(ConfigurationKeys.SOURCE_CONN_PASSWORD));
+      partnerConfig.setUsername(this.workUnitState.getProp(ConfigurationKeys.SOURCE_CONN_USERNAME));
       partnerConfig.setPassword(password + securityToken);
       partnerConfig.setAuthEndpoint(soapAuthEndPoint);
       new PartnerConnection(partnerConfig);
@@ -627,8 +632,8 @@ public class SalesforceExtractor extends RestApiExtractor {
 
       this.bulkConnection = new BulkConnection(config);
       success = true;
-    } catch (Exception e) {
-      throw new Exception("Failed to connect to salesforce bulk api; error - " + e.getMessage(), e);
+    } catch (RuntimeException e) {
+      throw new RuntimeException("Failed to connect to salesforce bulk api; error - " + e, e);
     }
     return success;
   }
@@ -682,10 +687,6 @@ public class SalesforceExtractor extends RestApiExtractor {
 
       // Get batch info with complete resultset (info id - refers to the resultset id corresponding to entire resultset)
       this.bulkBatchInfo = this.bulkConnection.getBatchInfo(this.bulkJob.getId(), this.bulkBatchInfo.getId());
-      if (this.bulkBatchInfo.getState() == BatchStateEnum.Failed) {
-        throw new RuntimeException("Failed to get bulk batch info for jobId " + this.bulkBatchInfo.getJobId()
-            + " error - " + this.bulkBatchInfo.getStateMessage());
-      }
 
       while ((this.bulkBatchInfo.getState() != BatchStateEnum.Completed)
           && (this.bulkBatchInfo.getState() != BatchStateEnum.Failed)) {
@@ -693,6 +694,12 @@ public class SalesforceExtractor extends RestApiExtractor {
         this.bulkBatchInfo = this.bulkConnection.getBatchInfo(this.bulkJob.getId(), this.bulkBatchInfo.getId());
         log.debug("Bulk Api Batch Info:" + this.bulkBatchInfo);
         log.info("Waiting for bulk resultSetIds");
+      }
+
+      if (this.bulkBatchInfo.getState() == BatchStateEnum.Failed) {
+        log.error("Bulk batch failed: " + bulkBatchInfo.toString());
+        throw new RuntimeException("Failed to get bulk batch info for jobId " + this.bulkBatchInfo.getJobId()
+            + " error - " + this.bulkBatchInfo.getStateMessage());
       }
 
       // Get resultset ids from the batch info
@@ -741,7 +748,7 @@ public class SalesforceExtractor extends RestApiExtractor {
       // if Buffer stream has data then process the same
 
       // Get batch size from .pull file
-      int batchSize = Utils.getAsInt(this.workUnit.getProp(ConfigurationKeys.SOURCE_QUERYBASED_FETCH_SIZE));
+      int batchSize = Utils.getAsInt(this.workUnitState.getProp(ConfigurationKeys.SOURCE_QUERYBASED_FETCH_SIZE));
       if (batchSize == 0) {
         batchSize = ConfigurationKeys.DEFAULT_SOURCE_FETCH_SIZE;
       }

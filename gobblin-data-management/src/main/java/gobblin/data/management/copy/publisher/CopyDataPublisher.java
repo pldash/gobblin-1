@@ -1,40 +1,49 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.data.management.copy.publisher;
 
+
+import gobblin.metrics.event.sla.SlaEventKeys;
 import java.io.IOException;
 import java.net.URI;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 
+import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
 import com.google.common.collect.Multimap;
-
-import lombok.extern.slf4j.Slf4j;
 
 import gobblin.commit.CommitStep;
 import gobblin.configuration.ConfigurationKeys;
 import gobblin.configuration.State;
 import gobblin.configuration.WorkUnitState;
 import gobblin.configuration.WorkUnitState.WorkingState;
+import gobblin.data.management.copy.CopyEntity;
 import gobblin.data.management.copy.CopySource;
 import gobblin.data.management.copy.CopyableDataset;
 import gobblin.data.management.copy.CopyableDatasetMetadata;
@@ -44,16 +53,17 @@ import gobblin.data.management.copy.entities.PostPublishStep;
 import gobblin.data.management.copy.entities.PrePublishStep;
 import gobblin.data.management.copy.recovery.RecoveryHelper;
 import gobblin.data.management.copy.writer.FileAwareInputStreamDataWriter;
-import gobblin.data.management.copy.CopyEntity;
 import gobblin.data.management.copy.writer.FileAwareInputStreamDataWriterBuilder;
-import gobblin.publisher.UnpublishedHandling;
 import gobblin.instrumented.Instrumented;
 import gobblin.metrics.GobblinMetrics;
 import gobblin.metrics.MetricContext;
 import gobblin.metrics.event.EventSubmitter;
 import gobblin.publisher.DataPublisher;
+import gobblin.publisher.UnpublishedHandling;
 import gobblin.util.HadoopUtils;
+import gobblin.util.WriterUtils;
 
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * A {@link DataPublisher} to {@link gobblin.data.management.copy.CopyEntity}s from task output to final destination.
@@ -83,10 +93,8 @@ public class CopyDataPublisher extends DataPublisher implements UnpublishedHandl
    */
   public CopyDataPublisher(State state) throws IOException {
     super(state);
-    Configuration conf = new Configuration();
     String uri = this.state.getProp(ConfigurationKeys.WRITER_FILE_SYSTEM_URI, ConfigurationKeys.LOCAL_FS_URI);
-
-    this.fs = FileSystem.get(URI.create(uri), conf);
+    this.fs = FileSystem.get(URI.create(uri), WriterUtils.getFsConfiguration(state));
 
     FileAwareInputStreamDataWriterBuilder.setJobSpecificOutputPaths(state);
 
@@ -157,6 +165,7 @@ public class CopyDataPublisher extends DataPublisher implements UnpublishedHandl
    */
   private void publishFileSet(CopyEntity.DatasetAndPartition datasetAndPartition,
       Collection<WorkUnitState> datasetWorkUnitStates) throws IOException {
+    Map<String, String> additionalMetadata = Maps.newHashMap();
 
     Preconditions.checkArgument(!datasetWorkUnitStates.isEmpty(),
         "publishFileSet received an empty collection work units. This is an error in code.");
@@ -174,8 +183,12 @@ public class CopyDataPublisher extends DataPublisher implements UnpublishedHandl
         prePublish.size(), postPublish.size()));
 
     executeCommitSequence(prePublish);
-    // Targets are always absolute, so we start moving from root (will skip any existing directories).
-    HadoopUtils.renameRecursively(this.fs, datasetWriterOutputPath, new Path("/"));
+    if (hasCopyableFiles(datasetWorkUnitStates)) {
+      // Targets are always absolute, so we start moving from root (will skip any existing directories).
+      HadoopUtils.renameRecursively(this.fs, datasetWriterOutputPath, new Path("/"));
+    } else {
+      log.info(String.format("[%s] No copyable files in dataset. Proceeding to postpublish steps.", datasetAndPartition.identifier()));
+    }
     executeCommitSequence(postPublish);
 
     this.fs.delete(datasetWriterOutputPath, true);
@@ -202,8 +215,28 @@ public class CopyDataPublisher extends DataPublisher implements UnpublishedHandl
       }
     }
 
+    // if there are no valid values for datasetOriginTimestamp and datasetUpstreamTimestamp, use
+    // something more readable
+    if (Long.MAX_VALUE == datasetOriginTimestamp) {
+      datasetOriginTimestamp = 0;
+    }
+    if (Long.MAX_VALUE == datasetUpstreamTimestamp) {
+      datasetUpstreamTimestamp = 0;
+    }
+
+    additionalMetadata.put(SlaEventKeys.SOURCE_URI, this.state.getProp(SlaEventKeys.SOURCE_URI));
+    additionalMetadata.put(SlaEventKeys.DESTINATION_URI, this.state.getProp(SlaEventKeys.DESTINATION_URI));
     CopyEventSubmitterHelper.submitSuccessfulDatasetPublish(this.eventSubmitter, datasetAndPartition,
-        Long.toString(datasetOriginTimestamp), Long.toString(datasetUpstreamTimestamp));
+        Long.toString(datasetOriginTimestamp), Long.toString(datasetUpstreamTimestamp), additionalMetadata);
+    }
+
+  private static boolean hasCopyableFiles(Collection<WorkUnitState> workUnits) throws IOException {
+    for (WorkUnitState wus : workUnits) {
+      if (CopyableFile.class.isAssignableFrom(CopySource.getCopyEntityClass(wus))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static List<CommitStep> getCommitSequence(Collection<WorkUnitState> workUnits, Class<?> baseClass)

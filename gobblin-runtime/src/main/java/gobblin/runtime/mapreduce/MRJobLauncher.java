@@ -1,24 +1,25 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.runtime.mapreduce;
 
-import java.io.BufferedWriter;
 import java.io.DataOutputStream;
 import java.io.FileInputStream;
 import java.io.IOException;
-import java.io.OutputStream;
-import java.io.OutputStreamWriter;
-import java.io.Writer;
 import java.net.URI;
 import java.util.List;
 import java.util.Properties;
@@ -33,6 +34,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.LongWritable;
 import org.apache.hadoop.io.NullWritable;
 import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapred.JobContext;
 import org.apache.hadoop.mapreduce.Counter;
 import org.apache.hadoop.mapreduce.CounterGroup;
 import org.apache.hadoop.mapreduce.Counters;
@@ -40,7 +42,6 @@ import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.filecache.DistributedCache;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
-import org.apache.hadoop.mapreduce.lib.input.NLineInputFormat;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,7 +54,13 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
 import com.google.common.io.Closer;
 import com.google.common.util.concurrent.ServiceManager;
+import com.typesafe.config.ConfigFactory;
 
+import gobblin.broker.gobblin_scopes.GobblinScopeTypes;
+import gobblin.broker.gobblin_scopes.JobScopeInstance;
+import gobblin.broker.SharedResourcesBrokerFactory;
+import gobblin.broker.iface.SharedResourcesBroker;
+import gobblin.commit.CommitStep;
 import gobblin.configuration.ConfigurationKeys;
 import gobblin.metastore.FsStateStore;
 import gobblin.metastore.StateStore;
@@ -62,6 +69,7 @@ import gobblin.metrics.Tag;
 import gobblin.metrics.event.TimingEvent;
 import gobblin.password.PasswordManager;
 import gobblin.runtime.AbstractJobLauncher;
+import gobblin.runtime.GobblinMultiTaskAttempt;
 import gobblin.runtime.JobLauncher;
 import gobblin.runtime.JobState;
 import gobblin.runtime.Task;
@@ -112,6 +120,9 @@ public class MRJobLauncher extends AbstractJobLauncher {
   private final FileSystem fs;
   private final Job job;
   private final Path mrJobDir;
+  private final Path jarsDir;
+  /** A location to store jars that should not be shared between different jobs. */
+  private final Path unsharedJarsDir;
   private final Path jobInputPath;
   private final Path jobOutputPath;
 
@@ -121,12 +132,21 @@ public class MRJobLauncher extends AbstractJobLauncher {
 
   private volatile boolean hadoopJobSubmitted = false;
 
-  public MRJobLauncher(Properties jobProps) throws Exception {
-    this(jobProps, new Configuration());
+  private final StateStore<TaskState> taskStateStore;
+
+  public MRJobLauncher(Properties jobProps)
+      throws Exception {
+    this(jobProps, null);
   }
 
-  public MRJobLauncher(Properties jobProps, Configuration conf) throws Exception {
-    super(jobProps, ImmutableList.<Tag<?>> of());
+  public MRJobLauncher(Properties jobProps, SharedResourcesBroker<GobblinScopeTypes> instanceBroker)
+      throws Exception {
+    this(jobProps, new Configuration(), instanceBroker);
+  }
+
+  public MRJobLauncher(Properties jobProps, Configuration conf, SharedResourcesBroker<GobblinScopeTypes> instanceBroker)
+      throws Exception {
+    super(jobProps, ImmutableList.<Tag<?>>of());
 
     this.conf = conf;
     // Put job configuration properties into the Hadoop configuration so they are available in the mappers
@@ -140,20 +160,21 @@ public class MRJobLauncher extends AbstractJobLauncher {
 
     this.fs = buildFileSystem(jobProps, this.conf);
 
-    this.mrJobDir =
-        new Path(this.jobProps.getProperty(ConfigurationKeys.MR_JOB_ROOT_DIR_KEY), this.jobContext.getJobName());
+    this.mrJobDir = new Path(
+        new Path(this.jobProps.getProperty(ConfigurationKeys.MR_JOB_ROOT_DIR_KEY), this.jobContext.getJobName()),
+        this.jobContext.getJobId());
     if (this.fs.exists(this.mrJobDir)) {
       LOG.warn("Job working directory already exists for job " + this.jobContext.getJobName());
       this.fs.delete(this.mrJobDir, true);
     }
+    this.unsharedJarsDir = new Path(this.mrJobDir, JARS_DIR_NAME);
+    this.jarsDir = this.jobProps.containsKey(ConfigurationKeys.MR_JARS_DIR) ? new Path(
+        this.jobProps.getProperty(ConfigurationKeys.MR_JARS_DIR)) : this.unsharedJarsDir;
     this.fs.mkdirs(this.mrJobDir);
 
     this.jobInputPath = new Path(this.mrJobDir, INPUT_DIR_NAME);
     this.jobOutputPath = new Path(this.mrJobDir, OUTPUT_DIR_NAME);
     Path outputTaskStateDir = new Path(this.jobOutputPath, this.jobContext.getJobId());
-
-    // Add dependent jars/files
-    addDependencies();
 
     // Finally create the Hadoop job after all updates to conf are already made (including
     // adding dependent jars/files to the DistributedCache that also updates the conf)
@@ -162,14 +183,22 @@ public class MRJobLauncher extends AbstractJobLauncher {
     this.parallelRunnerThreads = Integer.parseInt(jobProps.getProperty(ParallelRunner.PARALLEL_RUNNER_THREADS_KEY,
         Integer.toString(ParallelRunner.DEFAULT_PARALLEL_RUNNER_THREADS)));
 
-    this.taskStateCollectorService = new TaskStateCollectorService(jobProps, this.jobContext.getJobState(),
-        this.eventBus, this.fs, outputTaskStateDir);
+    // StateStore interface uses the following key (rootDir, storeName, tableName)
+    // The state store base is the root directory and the last two elements of the path are used as the storeName and
+    // tableName. Create the state store with the root at jobOutputPath. The task state will be stored at
+    // jobOutputPath/output/taskState.tst, so output will be the storeName.
+    taskStateStore = new FsStateStore<>(this.fs, jobOutputPath.toString(), TaskState.class);
+
+    this.taskStateCollectorService =
+        new TaskStateCollectorService(jobProps, this.jobContext.getJobState(), this.eventBus, taskStateStore,
+            outputTaskStateDir);
 
     startCancellationExecutor();
   }
 
   @Override
-  public void close() throws IOException {
+  public void close()
+      throws IOException {
     try {
       if (this.hadoopJobSubmitted && !this.job.isComplete()) {
         LOG.info("Killing the Hadoop MR job for job " + this.jobContext.getJobId());
@@ -180,12 +209,14 @@ public class MRJobLauncher extends AbstractJobLauncher {
         cleanUpWorkingDirectory();
       } finally {
         super.close();
+        fs.close();
       }
     }
   }
 
   @Override
-  protected void runWorkUnits(List<WorkUnit> workUnits) throws Exception {
+  protected void runWorkUnits(List<WorkUnit> workUnits)
+      throws Exception {
     String jobName = this.jobContext.getJobName();
     JobState jobState = this.jobContext.getJobState();
 
@@ -234,6 +265,8 @@ public class MRJobLauncher extends AbstractJobLauncher {
       if (this.hadoopJobSubmitted && !this.job.isComplete()) {
         LOG.info("Killing the Hadoop MR job for job " + this.jobContext.getJobId());
         this.job.killJob();
+        // Collect final task states.
+        this.taskStateCollectorService.stopAsync().awaitTerminated();
       }
     } catch (IllegalStateException ise) {
       LOG.error("The Hadoop MR job has not started for job " + this.jobContext.getJobId());
@@ -245,36 +278,37 @@ public class MRJobLauncher extends AbstractJobLauncher {
   /**
    * Add dependent jars and files.
    */
-  private void addDependencies() throws IOException {
+  private void addDependencies(Configuration conf)
+      throws IOException {
     TimingEvent distributedCacheSetupTimer =
         this.eventSubmitter.getTimingEvent(TimingEvent.RunJobTimings.MR_DISTRIBUTED_CACHE_SETUP);
 
-    Path jarFileDir = new Path(this.mrJobDir, JARS_DIR_NAME);
+    Path jarFileDir = this.jarsDir;
 
     // Add framework jars to the classpath for the mappers/reducer
     if (this.jobProps.containsKey(ConfigurationKeys.FRAMEWORK_JAR_FILES_KEY)) {
-      addJars(jarFileDir, this.jobProps.getProperty(ConfigurationKeys.FRAMEWORK_JAR_FILES_KEY));
+      addJars(jarFileDir, this.jobProps.getProperty(ConfigurationKeys.FRAMEWORK_JAR_FILES_KEY), conf);
     }
 
     // Add job-specific jars to the classpath for the mappers
     if (this.jobProps.containsKey(ConfigurationKeys.JOB_JAR_FILES_KEY)) {
-      addJars(jarFileDir, this.jobProps.getProperty(ConfigurationKeys.JOB_JAR_FILES_KEY));
+      addJars(jarFileDir, this.jobProps.getProperty(ConfigurationKeys.JOB_JAR_FILES_KEY), conf);
     }
 
     // Add other files (if any) the job depends on to DistributedCache
     if (this.jobProps.containsKey(ConfigurationKeys.JOB_LOCAL_FILES_KEY)) {
       addLocalFiles(new Path(this.mrJobDir, FILES_DIR_NAME),
-          this.jobProps.getProperty(ConfigurationKeys.JOB_LOCAL_FILES_KEY));
+          this.jobProps.getProperty(ConfigurationKeys.JOB_LOCAL_FILES_KEY), conf);
     }
 
     // Add files (if any) already on HDFS that the job depends on to DistributedCache
     if (this.jobProps.containsKey(ConfigurationKeys.JOB_HDFS_FILES_KEY)) {
-      addHDFSFiles(this.jobProps.getProperty(ConfigurationKeys.JOB_HDFS_FILES_KEY));
+      addHDFSFiles(this.jobProps.getProperty(ConfigurationKeys.JOB_HDFS_FILES_KEY), conf);
     }
 
     // Add job-specific jars existing in HDFS to the classpath for the mappers
     if (this.jobProps.containsKey(ConfigurationKeys.JOB_JAR_HDFS_FILES_KEY)) {
-      addHdfsJars(this.jobProps.getProperty(ConfigurationKeys.JOB_JAR_HDFS_FILES_KEY));
+      addHdfsJars(this.jobProps.getProperty(ConfigurationKeys.JOB_JAR_HDFS_FILES_KEY), conf);
     }
 
     distributedCacheSetupTimer.stop();
@@ -283,8 +317,12 @@ public class MRJobLauncher extends AbstractJobLauncher {
   /**
    * Prepare the Hadoop MR job, including configuring the job and setting up the input/output paths.
    */
-  private void prepareHadoopJob(List<WorkUnit> workUnits) throws IOException {
+  private void prepareHadoopJob(List<WorkUnit> workUnits)
+      throws IOException {
     TimingEvent mrJobSetupTimer = this.eventSubmitter.getTimingEvent(TimingEvent.RunJobTimings.MR_JOB_SETUP);
+
+    // Add dependent jars/files
+    addDependencies(this.job.getConfiguration());
 
     this.job.setJarByClass(MRJobLauncher.class);
     this.job.setMapperClass(TaskRunner.class);
@@ -292,19 +330,22 @@ public class MRJobLauncher extends AbstractJobLauncher {
     // The job is mapper-only
     this.job.setNumReduceTasks(0);
 
-    this.job.setInputFormatClass(NLineInputFormat.class);
+    this.job.setInputFormatClass(GobblinWorkUnitsInputFormat.class);
     this.job.setOutputFormatClass(GobblinOutputFormat.class);
     this.job.setMapOutputKeyClass(NullWritable.class);
     this.job.setMapOutputValueClass(NullWritable.class);
 
-    // Turn off speculative execution
-    this.job.setSpeculativeExecution(false);
+    // Set speculative execution
+
+    this.job.setSpeculativeExecution(isSpeculativeExecutionEnabled(this.jobProps));
+
+    this.job.getConfiguration().set("mapreduce.job.user.classpath.first", "true");
 
     // Job input path is where input work unit files are stored
 
     // Prepare job input
-    Path jobInputFile = prepareJobInput(workUnits);
-    FileInputFormat.addInputPath(this.job, jobInputFile);
+    prepareJobInput(workUnits);
+    FileInputFormat.addInputPath(this.job, this.jobInputPath);
 
     // Job output path is where serialized task states are stored
     FileOutputFormat.setOutputPath(this.job, this.jobOutputPath);
@@ -313,17 +354,16 @@ public class MRJobLauncher extends AbstractJobLauncher {
     serializeJobState(this.fs, this.mrJobDir, this.conf, this.jobContext.getJobState(), this.job);
 
     if (this.jobProps.containsKey(ConfigurationKeys.MR_JOB_MAX_MAPPERS_KEY)) {
-      // When there is a limit on the number of mappers, each mapper may run
-      // multiple tasks if the total number of tasks is larger than the limit.
-      int maxMappers = Integer.parseInt(this.jobProps.getProperty(ConfigurationKeys.MR_JOB_MAX_MAPPERS_KEY));
-      if (workUnits.size() > maxMappers) {
-        int numTasksPerMapper =
-            workUnits.size() % maxMappers == 0 ? workUnits.size() / maxMappers : workUnits.size() / maxMappers + 1;
-        NLineInputFormat.setNumLinesPerSplit(this.job, numTasksPerMapper);
-      }
+      GobblinWorkUnitsInputFormat.setMaxMappers(this.job,
+          Integer.parseInt(this.jobProps.getProperty(ConfigurationKeys.MR_JOB_MAX_MAPPERS_KEY)));
     }
 
     mrJobSetupTimer.stop();
+  }
+
+  static boolean isSpeculativeExecutionEnabled(Properties props) {
+    return Boolean.valueOf(
+        props.getProperty(JobContext.MAP_SPECULATIVE, ConfigurationKeys.DEFAULT_ENABLE_MR_SPECULATIVE_EXECUTION));
   }
 
   @VisibleForTesting
@@ -346,19 +386,24 @@ public class MRJobLauncher extends AbstractJobLauncher {
    * so the mappers can use them.
    */
   @SuppressWarnings("deprecation")
-  private void addJars(Path jarFileDir, String jarFileList) throws IOException {
-    LocalFileSystem lfs = FileSystem.getLocal(this.conf);
+  private void addJars(Path jarFileDir, String jarFileList, Configuration conf)
+      throws IOException {
+    LocalFileSystem lfs = FileSystem.getLocal(conf);
     for (String jarFile : SPLITTER.split(jarFileList)) {
       Path srcJarFile = new Path(jarFile);
       FileStatus[] fileStatusList = lfs.globStatus(srcJarFile);
       for (FileStatus status : fileStatusList) {
+        // SNAPSHOT jars should not be shared, as different jobs may be using different versions of it
+        Path baseDir = status.getPath().getName().contains("SNAPSHOT") ? this.unsharedJarsDir : jarFileDir;
         // DistributedCache requires absolute path, so we need to use makeQualified.
-        Path destJarFile = new Path(this.fs.makeQualified(jarFileDir), status.getPath().getName());
-        // Copy the jar file from local file system to HDFS
-        this.fs.copyFromLocalFile(status.getPath(), destJarFile);
+        Path destJarFile = new Path(this.fs.makeQualified(baseDir), status.getPath().getName());
+        if (!this.fs.exists(destJarFile)) {
+          // Copy the jar file from local file system to HDFS
+          this.fs.copyFromLocalFile(status.getPath(), destJarFile);
+        }
         // Then add the jar file on HDFS to the classpath
         LOG.info(String.format("Adding %s to classpath", destJarFile));
-        DistributedCache.addFileToClassPath(destJarFile, this.conf, this.fs);
+        DistributedCache.addFileToClassPath(destJarFile, conf, this.fs);
       }
     }
   }
@@ -367,8 +412,9 @@ public class MRJobLauncher extends AbstractJobLauncher {
    * Add local non-jar files the job depends on to DistributedCache.
    */
   @SuppressWarnings("deprecation")
-  private void addLocalFiles(Path jobFileDir, String jobFileList) throws IOException {
-    DistributedCache.createSymlink(this.conf);
+  private void addLocalFiles(Path jobFileDir, String jobFileList, Configuration conf)
+      throws IOException {
+    DistributedCache.createSymlink(conf);
     for (String jobFile : SPLITTER.split(jobFileList)) {
       Path srcJobFile = new Path(jobFile);
       // DistributedCache requires absolute path, so we need to use makeQualified.
@@ -379,7 +425,7 @@ public class MRJobLauncher extends AbstractJobLauncher {
       URI destFileUri = URI.create(destJobFile.toUri().getPath() + "#" + destJobFile.getName());
       LOG.info(String.format("Adding %s to DistributedCache", destFileUri));
       // Finally add the file to DistributedCache with a symlink named after the file name
-      DistributedCache.addCacheFile(destFileUri, this.conf);
+      DistributedCache.addCacheFile(destFileUri, conf);
     }
   }
 
@@ -387,8 +433,8 @@ public class MRJobLauncher extends AbstractJobLauncher {
    * Add non-jar files already on HDFS that the job depends on to DistributedCache.
    */
   @SuppressWarnings("deprecation")
-  private void addHDFSFiles(String jobFileList) {
-    DistributedCache.createSymlink(this.conf);
+  private void addHDFSFiles(String jobFileList, Configuration conf) {
+    DistributedCache.createSymlink(conf);
     jobFileList = PasswordManager.getInstance(this.jobProps).readPassword(jobFileList);
     for (String jobFile : SPLITTER.split(jobFileList)) {
       Path srcJobFile = new Path(jobFile);
@@ -396,18 +442,19 @@ public class MRJobLauncher extends AbstractJobLauncher {
       URI srcFileUri = URI.create(srcJobFile.toUri().getPath() + "#" + srcJobFile.getName());
       LOG.info(String.format("Adding %s to DistributedCache", srcFileUri));
       // Finally add the file to DistributedCache with a symlink named after the file name
-      DistributedCache.addCacheFile(srcFileUri, this.conf);
+      DistributedCache.addCacheFile(srcFileUri, conf);
     }
   }
 
-  private void addHdfsJars(String hdfsJarFileList) throws IOException {
+  private void addHdfsJars(String hdfsJarFileList, Configuration conf)
+      throws IOException {
     for (String jarFile : SPLITTER.split(hdfsJarFileList)) {
       FileStatus[] status = this.fs.listStatus(new Path(jarFile));
       for (FileStatus fileStatus : status) {
         if (!fileStatus.isDirectory()) {
           Path path = new Path(jarFile, fileStatus.getPath().getName());
           LOG.info(String.format("Adding %s to classpath", path));
-          DistributedCache.addFileToClassPath(path, this.conf, this.fs);
+          DistributedCache.addFileToClassPath(path, conf, this.fs);
         }
       }
     }
@@ -417,18 +464,11 @@ public class MRJobLauncher extends AbstractJobLauncher {
    * Prepare the job input.
    * @throws IOException
    */
-  private Path prepareJobInput(List<WorkUnit> workUnits) throws IOException {
-    // The job input is a file named after the job ID listing all work unit file paths
-    Path jobInputFile = new Path(this.jobInputPath, this.jobContext.getJobId() + WORK_UNIT_LIST_FILE_EXTENSION);
-
+  private void prepareJobInput(List<WorkUnit> workUnits)
+      throws IOException {
     Closer closer = Closer.create();
     try {
       ParallelRunner parallelRunner = closer.register(new ParallelRunner(this.parallelRunnerThreads, this.fs));
-
-      // Open the job input file
-      OutputStream os = closer.register(this.fs.create(jobInputFile));
-      Writer osw = closer.register(new OutputStreamWriter(os, ConfigurationKeys.DEFAULT_CHARSET_ENCODING));
-      Writer bw = closer.register(new BufferedWriter(osw));
 
       int multiTaskIdSequence = 0;
       // Serialize each work unit into a file named after the task ID
@@ -442,19 +482,17 @@ public class MRJobLauncher extends AbstractJobLauncher {
           workUnitFileName = workUnit.getProp(ConfigurationKeys.TASK_ID_KEY) + WORK_UNIT_FILE_EXTENSION;
         }
         Path workUnitFile = new Path(this.jobInputPath, workUnitFileName);
+        LOG.debug("Writing work unit file " + workUnitFileName);
 
         parallelRunner.serializeToFile(workUnit, workUnitFile);
 
         // Append the work unit file path to the job input file
-        bw.write(workUnitFile.toUri().getPath() + "\n");
       }
     } catch (Throwable t) {
       throw closer.rethrow(t);
     } finally {
       closer.close();
     }
-
-    return jobInputFile;
   }
 
   /**
@@ -475,7 +513,8 @@ public class MRJobLauncher extends AbstractJobLauncher {
    * Create a {@link gobblin.metrics.GobblinMetrics} instance for this job run from the Hadoop counters.
    */
   @VisibleForTesting
-  void countersToMetrics(GobblinMetrics metrics) throws IOException {
+  void countersToMetrics(GobblinMetrics metrics)
+      throws IOException {
     Optional<Counters> counters = Optional.fromNullable(this.job.getCounters());
 
     if (counters.isPresent()) {
@@ -493,9 +532,10 @@ public class MRJobLauncher extends AbstractJobLauncher {
     }
   }
 
-  private static FileSystem buildFileSystem(Properties jobProps, Configuration configuration) throws IOException {
+  private static FileSystem buildFileSystem(Properties jobProps, Configuration configuration)
+      throws IOException {
     URI fsUri = URI.create(jobProps.getProperty(ConfigurationKeys.FS_URI_KEY, ConfigurationKeys.LOCAL_FS_URI));
-    return FileSystem.get(fsUri, configuration);
+    return FileSystem.newInstance(fsUri, configuration);
   }
 
   /**
@@ -518,7 +558,7 @@ public class MRJobLauncher extends AbstractJobLauncher {
     private TaskStateTracker taskStateTracker;
     private ServiceManager serviceManager;
     private Optional<JobMetrics> jobMetrics = Optional.absent();
-
+    private boolean isSpeculativeEnabled;
     private final JobState jobState = new JobState();
 
     // A list of WorkUnits (flattened for MultiWorkUnits) to be run by this mapper
@@ -527,6 +567,8 @@ public class MRJobLauncher extends AbstractJobLauncher {
     @Override
     protected void setup(Context context) {
       try (Closer closer = Closer.create()) {
+        this.isSpeculativeEnabled =
+            isSpeculativeExecutionEnabled(HadoopUtils.getStateFromConf(context.getConfiguration()).getProperties());
         this.fs = FileSystem.get(context.getConfiguration());
         this.taskStateStore =
             new FsStateStore<>(this.fs, FileOutputFormat.getOutputPath(context).toUri().getPath(), TaskState.class);
@@ -535,8 +577,9 @@ public class MRJobLauncher extends AbstractJobLauncher {
         boolean foundStateFile = false;
         for (Path dcPath : DistributedCache.getLocalCacheFiles(context.getConfiguration())) {
           if (dcPath.getName().equals(jobStateFileName)) {
-            SerializationUtils.deserializeStateFromInputStream(
-                closer.register(new FileInputStream(dcPath.toUri().getPath())), this.jobState);
+            SerializationUtils
+                .deserializeStateFromInputStream(closer.register(new FileInputStream(dcPath.toUri().getPath())),
+                    this.jobState);
             foundStateFile = true;
             break;
           }
@@ -565,29 +608,82 @@ public class MRJobLauncher extends AbstractJobLauncher {
           configuration.get(ConfigurationKeys.METRICS_ENABLED_KEY, ConfigurationKeys.DEFAULT_METRICS_ENABLED))) {
         this.jobMetrics = Optional.of(JobMetrics.get(this.jobState));
         this.jobMetrics.get().startMetricReportingWithFileSuffix(HadoopUtils.getStateFromConf(configuration),
-            context.getTaskAttemptID().getTaskID().toString());
+            context.getTaskAttemptID().toString());
       }
     }
 
     @Override
-    public void run(Context context) throws IOException, InterruptedException {
+    public void run(Context context)
+        throws IOException, InterruptedException {
       this.setup(context);
-
+      GobblinMultiTaskAttempt gobblinMultiTaskAttempt = null;
       try {
         // De-serialize and collect the list of WorkUnits to run
         while (context.nextKeyValue()) {
           this.map(context.getCurrentKey(), context.getCurrentValue(), context);
         }
+        GobblinMultiTaskAttempt.CommitPolicy multiTaskAttemptCommitPolicy =
+            isSpeculativeEnabled ? GobblinMultiTaskAttempt.CommitPolicy.CUSTOMIZED
+                : GobblinMultiTaskAttempt.CommitPolicy.IMMEDIATE;
+
+        SharedResourcesBroker<GobblinScopeTypes> globalBroker = SharedResourcesBrokerFactory.createDefaultTopLevelBroker(
+            ConfigFactory.parseProperties(this.jobState.getProperties()), GobblinScopeTypes.GLOBAL.defaultScopeInstance());
+        SharedResourcesBroker<GobblinScopeTypes> jobBroker =
+            globalBroker.newSubscopedBuilder(new JobScopeInstance(this.jobState.getJobName(), this.jobState.getJobId())).build();
+
         // Actually run the list of WorkUnits
-        runWorkUnits(this.jobState.getJobId(), context.getTaskAttemptID().toString(), this.jobState, this.workUnits,
-            this.taskStateTracker, this.taskExecutor, this.taskStateStore, LOG);
+        gobblinMultiTaskAttempt =
+            GobblinMultiTaskAttempt.runWorkUnits(this.jobState.getJobId(), context.getTaskAttemptID().toString(), this.jobState, this.workUnits,
+                this.taskStateTracker, this.taskExecutor, this.taskStateStore, multiTaskAttemptCommitPolicy, jobBroker);
+
+        if (this.isSpeculativeEnabled) {
+          LOG.info("will not commit in task attempt");
+          GobblinOutputCommitter gobblinOutputCommitter = (GobblinOutputCommitter) context.getOutputCommitter();
+          gobblinOutputCommitter.getAttemptIdToMultiTaskAttempt()
+              .put(context.getTaskAttemptID().toString(), gobblinMultiTaskAttempt);
+        }
       } finally {
-        this.cleanup(context);
+        CommitStep cleanUpCommitStep = new CommitStep() {
+
+          @Override
+          public boolean isCompleted()
+              throws IOException {
+            return !serviceManager.isHealthy();
+          }
+
+          @Override
+          public void execute()
+              throws IOException {
+            LOG.info("Starting the clean-up steps.");
+            try {
+              serviceManager.stopAsync().awaitStopped(5, TimeUnit.SECONDS);
+            } catch (TimeoutException te) {
+              // Ignored
+            } finally {
+              if (jobMetrics.isPresent()) {
+                try {
+                  jobMetrics.get().stopMetricsReporting();
+                } catch (Throwable throwable) {
+                  LOG.error("Failed to stop job metrics reporting.", throwable);
+                } finally {
+                  GobblinMetrics.remove(jobMetrics.get().getName());
+                }
+              }
+            }
+          }
+        };
+        if (!this.isSpeculativeEnabled || gobblinMultiTaskAttempt == null) {
+          cleanUpCommitStep.execute();
+        } else {
+          LOG.info("Adding additional commit step");
+          gobblinMultiTaskAttempt.addCleanupCommitStep(cleanUpCommitStep);
+        }
       }
     }
 
     @Override
-    public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
+    public void map(LongWritable key, Text value, Context context)
+        throws IOException, InterruptedException {
       WorkUnit workUnit = (value.toString().endsWith(MULTI_WORK_UNIT_FILE_EXTENSION) ? MultiWorkUnit.createEmpty()
           : WorkUnit.createEmpty());
       SerializationUtils.deserializeState(this.fs, new Path(value.toString()), workUnit);
@@ -598,23 +694,6 @@ public class MRJobLauncher extends AbstractJobLauncher {
         this.workUnits.addAll(flattenedWorkUnits);
       } else {
         this.workUnits.add(workUnit);
-      }
-    }
-
-    @Override
-    protected void cleanup(Context context) throws IOException, InterruptedException {
-      try {
-        this.serviceManager.stopAsync().awaitStopped(5, TimeUnit.SECONDS);
-      } catch (TimeoutException te) {
-        // Ignored
-      } finally {
-        if (this.jobMetrics.isPresent()) {
-          try {
-            this.jobMetrics.get().stopMetricsReporting();
-          } finally {
-            GobblinMetrics.remove(this.jobMetrics.get().getName());
-          }
-        }
       }
     }
   }

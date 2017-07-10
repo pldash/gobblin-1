@@ -1,13 +1,18 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.converter.jdbc;
@@ -42,6 +47,7 @@ public class AvroToJdbcEntryConverterTest {
 
   @Test
   public void testDateConversion() throws IOException, SchemaConversionException, SQLException {
+    final String db = "db";
     final String table = "users";
     Map<String, JdbcType> dateColums = new HashMap<>();
     dateColums.put("date_of_birth", JdbcType.DATE);
@@ -49,7 +55,7 @@ public class AvroToJdbcEntryConverterTest {
     dateColums.put("created", JdbcType.TIMESTAMP);
 
     JdbcWriterCommands mockWriterCommands = mock(JdbcWriterCommands.class);
-    when(mockWriterCommands.retrieveDateColumns(table)).thenReturn(dateColums);
+    when(mockWriterCommands.retrieveDateColumns(db, table)).thenReturn(dateColums);
 
     JdbcWriterCommandsFactory factory = mock(JdbcWriterCommandsFactory.class);
     when(factory.newInstance(any(State.class), any(Connection.class))).thenReturn(mockWriterCommands);
@@ -85,9 +91,10 @@ public class AvroToJdbcEntryConverterTest {
     Map<String, JdbcType> dateColums = new HashMap<>();
     dateColums.put("last_updated", JdbcType.TIMESTAMP);
 
+    final String db = "db";
     final String table = "users";
     JdbcWriterCommands mockWriterCommands = mock(JdbcWriterCommands.class);
-    when(mockWriterCommands.retrieveDateColumns(table)).thenReturn(dateColums);
+    when(mockWriterCommands.retrieveDateColumns(db, table)).thenReturn(dateColums);
 
     JdbcWriterCommandsFactory factory = mock(JdbcWriterCommandsFactory.class);
     when(factory.newInstance(any(State.class), any(Connection.class))).thenReturn(mockWriterCommands);

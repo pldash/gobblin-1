@@ -1,13 +1,18 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.source.extractor.hadoop;
@@ -47,7 +52,7 @@ import gobblin.util.HadoopUtils;
  * {@link RecordReader} to read the {@link FileSplit}.
  *
  * <p>
- *   This class can read either keys of type {@link #<K>} or values of type {@link #<V>} supported by the
+ *   This class can read either keys of type K or values of type V supported by the
  *   given {@link FileInputFormat}, through the property {@link #FILE_INPUT_READ_KEYS_KEY}. It will read keys
  *   if the property is set to {@code true}, otherwise it will read values. By default, it will read values
  *   through the given {@link FileInputFormat}.
@@ -175,8 +180,8 @@ public abstract class HadoopFileInputSource<S, D, K, V> extends AbstractSource<S
    * @param workUnitState a {@link WorkUnitState} object carrying Gobblin configuration properties
    * @param recordReader a Hadoop {@link RecordReader} object used to read input records
    * @param fileSplit the {@link FileSplit} to read input records from
-   * @param readKeys whether the {@link OldApiHadoopFileInputExtractor} should read keys of type {@link #<K>};
-   *                 by default values of type {@link #>V>} are read.
+   * @param readKeys whether the {@link OldApiHadoopFileInputExtractor} should read keys of type K;
+   *                 by default values of type V are read.
    * @return a {@link HadoopFileInputExtractor} instance
    */
   protected abstract HadoopFileInputExtractor<S, D, K, V> getExtractor(WorkUnitState workUnitState,

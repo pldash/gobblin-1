@@ -1,12 +1,18 @@
-/* (c) 2015 LinkedIn Corp. All rights reserved.
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.source.extractor.extract.jdbc;
@@ -28,8 +34,11 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mockrunner.mock.jdbc.MockResultSet;
 
+import gobblin.configuration.ConfigurationKeys;
 import gobblin.configuration.State;
 import gobblin.configuration.WorkUnitState;
+import gobblin.source.extractor.exception.SchemaException;
+import gobblin.source.extractor.extract.Command;
 import gobblin.source.extractor.extract.CommandOutput;
 import gobblin.source.extractor.extract.jdbc.JdbcCommand;
 import gobblin.source.extractor.extract.jdbc.JdbcCommandOutput;
@@ -87,4 +96,29 @@ public class JdbcExtractorTest {
     return mrs;
   }
 
+  /**
+   * Test for the metadata query to see if the check for unsigned int is present
+   */
+  @Test
+  public void testUnsignedInt() throws SchemaException {
+    State state = new WorkUnitState();
+    state.setId("id");
+    MysqlExtractor mysqlExtractor = new MysqlExtractor((WorkUnitState) state);
+
+    List<Command> commands = mysqlExtractor.getSchemaMetadata("db", "table");
+
+    assertTrue(commands.get(0).getCommandType() == JdbcCommand.JdbcCommandType.QUERY);
+    assertTrue(commands.get(0).getParams().get(0).contains("bigint"));
+    assertTrue(commands.get(1).getCommandType() == JdbcCommand.JdbcCommandType.QUERYPARAMS);
+    assertTrue(!commands.get(1).getParams().get(0).contains("unsigned"));
+
+    // set option to promote unsigned int to bigint
+    state.setProp(ConfigurationKeys.SOURCE_QUERYBASED_PROMOTE_UNSIGNED_INT_TO_BIGINT, "true");
+    commands = mysqlExtractor.getSchemaMetadata("db", "table");
+
+    assertTrue(commands.get(0).getCommandType() == JdbcCommand.JdbcCommandType.QUERY);
+    assertTrue(commands.get(0).getParams().get(0).contains("bigint"));
+    assertTrue(commands.get(1).getCommandType() == JdbcCommand.JdbcCommandType.QUERYPARAMS);
+    assertTrue(commands.get(1).getParams().get(0).contains("unsigned"));
+  }
 }

@@ -1,13 +1,18 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.util.limiter;
@@ -27,12 +32,27 @@ import gobblin.configuration.State;
 public class DefaultLimiterFactory {
 
   public static final String EXTRACT_LIMIT_TYPE_KEY = "extract.limit.type";
-  public static final String EXTRACT_LIMIT_RATE_LIMIT_KEY = "extract.limit.rate.limit";
-  public static final String EXTRACT_LIMIT_RATE_LIMIT_TIMEUNIT_KEY = "extract.limit.rate.limit.timeunit";
-  public static final String EXTRACT_LIMIT_TIME_LIMIT_KEY = "extract.limit.time.limit";
-  public static final String EXTRACT_LIMIT_TIME_LIMIT_TIMEUNIT_KEY = "extract.limit.time.limit.timeunit";
+
+  public static final String EXTRACT_LIMIT_RATE_LIMIT_KEY = "extract.limit.rateLimit";
+
+  public static final String EXTRACT_LIMIT_RATE_LIMIT_TIMEUNIT_KEY = "extract.limit.rateLimitTimeunit";
+
+  public static final String EXTRACT_LIMIT_TIME_LIMIT_KEY = "extract.limit.timeLimit";
+
+  public static final String EXTRACT_LIMIT_TIME_LIMIT_TIMEUNIT_KEY = "extract.limit.timeLimitTimeunit";
+
   public static final String EXTRACT_LIMIT_COUNT_LIMIT_KEY = "extract.limit.count.limit";
+
   public static final String EXTRACT_LIMIT_POOL_SIZE_KEY = "extract.limit.pool.size";
+
+  @Deprecated
+  public static final String EXTRACT_LIMIT_RATE_LIMIT_KEY_DEP = "extract.limit.rate.limit";
+  @Deprecated
+  public static final String EXTRACT_LIMIT_RATE_LIMIT_TIMEUNIT_KEY_DEP = "extract.limit.rate.limit.timeunit";
+  @Deprecated
+  public static final String EXTRACT_LIMIT_TIME_LIMIT_KEY_DEP = "extract.limit.time.limit";
+  @Deprecated
+  public static final String EXTRACT_LIMIT_TIME_LIMIT_TIMEUNIT_KEY_DEP = "extract.limit.time.limit.timeunit";
 
   /**
    * Create a new {@link Limiter} instance of one of the types in {@link BaseLimiterType}.
@@ -57,6 +77,7 @@ public class DefaultLimiterFactory {
    * @throws IllegalArgumentException if the input configuration does not specify a valid supported
    */
   public static Limiter newLimiter(State state) {
+    state = convertDeprecatedConfigs(state);
     Preconditions.checkArgument(state.contains(EXTRACT_LIMIT_TYPE_KEY),
         String.format("Missing configuration property %s for the Limiter type", EXTRACT_LIMIT_TYPE_KEY));
     BaseLimiterType type = BaseLimiterType.forName(state.getProp(EXTRACT_LIMIT_TYPE_KEY));
@@ -89,5 +110,32 @@ public class DefaultLimiterFactory {
       default:
         throw new IllegalArgumentException("Unrecognized Limiter type: " + type.toString());
     }
+  }
+
+  /**
+   * Convert deprecated keys {@value #EXTRACT_LIMIT_RATE_LIMIT_KEY_DEP}, {@value #EXTRACT_LIMIT_RATE_LIMIT_TIMEUNIT_KEY_DEP},
+   * {@value #EXTRACT_LIMIT_TIME_LIMIT_KEY_DEP}, and {@value #EXTRACT_LIMIT_TIME_LIMIT_TIMEUNIT_KEY_DEP}, since they are not
+   * TypeSafe compatible. The deprecated keys will be removed from @param state, and replaced with
+   * {@value #EXTRACT_LIMIT_RATE_LIMIT_KEY}, {@value #EXTRACT_LIMIT_RATE_LIMIT_TIMEUNIT_KEY}, {@value #EXTRACT_LIMIT_TIME_LIMIT_KEY},
+   * and {@value #EXTRACT_LIMIT_TIME_LIMIT_TIMEUNIT_KEY}, respectively.
+   */
+  private static State convertDeprecatedConfigs(State state) {
+    if (state.contains(EXTRACT_LIMIT_RATE_LIMIT_KEY_DEP)) {
+      state.setProp(EXTRACT_LIMIT_RATE_LIMIT_KEY, state.getProp(EXTRACT_LIMIT_RATE_LIMIT_KEY_DEP));
+      state.removeProp(EXTRACT_LIMIT_RATE_LIMIT_KEY_DEP);
+    }
+    if (state.contains(EXTRACT_LIMIT_RATE_LIMIT_TIMEUNIT_KEY_DEP)) {
+      state.setProp(EXTRACT_LIMIT_RATE_LIMIT_TIMEUNIT_KEY, state.getProp(EXTRACT_LIMIT_RATE_LIMIT_TIMEUNIT_KEY_DEP));
+      state.removeProp(EXTRACT_LIMIT_RATE_LIMIT_TIMEUNIT_KEY_DEP);
+    }
+    if (state.contains(EXTRACT_LIMIT_TIME_LIMIT_KEY_DEP)) {
+      state.setProp(EXTRACT_LIMIT_TIME_LIMIT_KEY, state.getProp(EXTRACT_LIMIT_TIME_LIMIT_KEY_DEP));
+      state.removeProp(EXTRACT_LIMIT_TIME_LIMIT_KEY_DEP);
+    }
+    if (state.contains(EXTRACT_LIMIT_TIME_LIMIT_TIMEUNIT_KEY_DEP)) {
+      state.setProp(EXTRACT_LIMIT_TIME_LIMIT_TIMEUNIT_KEY, state.getProp(EXTRACT_LIMIT_TIME_LIMIT_TIMEUNIT_KEY_DEP));
+      state.removeProp(EXTRACT_LIMIT_TIME_LIMIT_TIMEUNIT_KEY_DEP);
+    }
+    return state;
   }
 }

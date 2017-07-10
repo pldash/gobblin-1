@@ -1,13 +1,18 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.converter;
@@ -17,7 +22,12 @@ import java.io.IOException;
 
 import gobblin.configuration.State;
 import gobblin.configuration.WorkUnitState;
+import gobblin.records.RecordStreamProcessor;
+import gobblin.records.RecordStreamWithMetadata;
+import gobblin.source.extractor.RecordEnvelope;
 import gobblin.util.FinalState;
+
+import io.reactivex.Flowable;
 
 
 /**
@@ -37,7 +47,7 @@ import gobblin.util.FinalState;
  * @param <DI> input data type
  * @param <DO> output data type
  */
-public abstract class Converter<SI, SO, DI, DO> implements Closeable, FinalState {
+public abstract class Converter<SI, SO, DI, DO> implements Closeable, FinalState, RecordStreamProcessor<SI, SO, DI, DO> {
   /**
    * Initialize this {@link Converter}.
    *
@@ -94,5 +104,21 @@ public abstract class Converter<SI, SO, DI, DO> implements Closeable, FinalState
   @Override
   public State getFinalState() {
     return new State();
+  }
+
+  /**
+   * Apply conversions to the input {@link RecordStreamWithMetadata}.
+   */
+  @Override
+  public RecordStreamWithMetadata<DO, SO> processStream(RecordStreamWithMetadata<DI, SI> inputStream,
+      WorkUnitState workUnitState) throws SchemaConversionException {
+    init(workUnitState);
+    SO outputSchema = convertSchema(inputStream.getSchema(), workUnitState);
+    Flowable<RecordEnvelope<DO>> outputStream =
+        inputStream.getRecordStream()
+            .flatMap(in -> Flowable.fromIterable(convertRecord(outputSchema, in.getRecord(), workUnitState))
+            .map(in::withRecord), 1);
+    outputStream = outputStream.doOnComplete(this::close);
+    return inputStream.withRecordStream(outputStream, outputSchema);
   }
 }

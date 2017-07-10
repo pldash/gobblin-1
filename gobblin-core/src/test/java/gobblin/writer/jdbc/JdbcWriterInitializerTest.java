@@ -1,13 +1,18 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.writer.jdbc;
@@ -41,6 +46,7 @@ import com.google.common.collect.Lists;
 
 @Test(groups = { "gobblin.writer" })
 public class JdbcWriterInitializerTest {
+  private static final String DB = "db";
   private static final String DEST_TABLE = "dest";
   private static final String STAGING_TABLE = "stage";
 
@@ -56,6 +62,7 @@ public class JdbcWriterInitializerTest {
   private void setup() throws SQLException {
     this.state = new State();
     this.state.setProp(ConfigurationKeys.WRITER_DESTINATION_TYPE_KEY, DestinationType.MYSQL.name());
+    this.state.setProp(JdbcPublisher.JDBC_PUBLISHER_DATABASE_NAME, DB);
     this.state.setProp(JdbcPublisher.JDBC_PUBLISHER_FINAL_TABLE_NAME, DEST_TABLE);
 
     this.workUnit = WorkUnit.createEmpty();
@@ -79,9 +86,9 @@ public class JdbcWriterInitializerTest {
     this.initializer.initialize();
     this.initializer.close();
     Assert.assertEquals(DEST_TABLE, this.workUnit.getProp(ConfigurationKeys.WRITER_STAGING_TABLE));
-    verify(this.commands, never()).createTableStructure(anyString(), anyString());
-    verify(this.commands, never()).truncate(anyString());
-    verify(this.commands, never()).drop(anyString());
+    verify(this.commands, never()).createTableStructure(anyString(), anyString(), anyString());
+    verify(this.commands, never()).truncate(anyString(), anyString());
+    verify(this.commands, never()).drop(anyString(), anyString());
   }
 
   public void skipStagingTableTruncateDestTable() throws SQLException {
@@ -92,47 +99,47 @@ public class JdbcWriterInitializerTest {
     this.initializer.initialize();
     Assert.assertEquals(DEST_TABLE, this.workUnit.getProp(ConfigurationKeys.WRITER_STAGING_TABLE));
 
-    verify(this.commands, never()).createTableStructure(anyString(), anyString());
+    verify(this.commands, never()).createTableStructure(anyString(), anyString(), anyString());
     InOrder inOrder = inOrder(this.commands);
-    inOrder.verify(this.commands, times(1)).truncate(DEST_TABLE);
+    inOrder.verify(this.commands, times(1)).truncate(DB, DEST_TABLE);
 
     this.initializer.close();
-    inOrder.verify(this.commands, never()).truncate(anyString());
-    verify(this.commands, never()).drop(anyString());
+    inOrder.verify(this.commands, never()).truncate(anyString(), anyString());
+    verify(this.commands, never()).drop(anyString(), anyString());
   }
 
   public void userCreatedStagingTable() throws SQLException {
     this.state.setProp(ConfigurationKeys.WRITER_STAGING_TABLE, STAGING_TABLE);
-    when(this.commands.isEmpty(STAGING_TABLE)).thenReturn(Boolean.TRUE);
+    when(this.commands.isEmpty(DB, STAGING_TABLE)).thenReturn(Boolean.TRUE);
 
     this.initializer.initialize();
 
     Assert.assertEquals(STAGING_TABLE, this.workUnit.getProp(ConfigurationKeys.WRITER_STAGING_TABLE));
-    verify(this.commands, never()).createTableStructure(anyString(), anyString());
-    verify(this.commands, never()).truncate(anyString());
-    verify(this.commands, never()).drop(anyString());
+    verify(this.commands, never()).createTableStructure(anyString(), anyString(), anyString());
+    verify(this.commands, never()).truncate(anyString(), anyString());
+    verify(this.commands, never()).drop(anyString(), anyString());
   }
 
   public void userCreatedStagingTableTruncate() throws SQLException {
     this.state.setProp(ConfigurationKeys.WRITER_STAGING_TABLE, STAGING_TABLE);
     this.state.setProp(ConfigurationKeys.WRITER_TRUNCATE_STAGING_TABLE, Boolean.toString(true));
-    when(this.commands.isEmpty(STAGING_TABLE)).thenReturn(Boolean.TRUE);
+    when(this.commands.isEmpty(DB, STAGING_TABLE)).thenReturn(Boolean.TRUE);
 
     this.initializer.initialize();
     Assert.assertEquals(STAGING_TABLE, this.workUnit.getProp(ConfigurationKeys.WRITER_STAGING_TABLE));
 
     InOrder inOrder = inOrder(this.commands);
-    inOrder.verify(this.commands, times(1)).truncate(STAGING_TABLE);
+    inOrder.verify(this.commands, times(1)).truncate(DB, STAGING_TABLE);
 
     this.initializer.close();
-    inOrder.verify(this.commands, times(1)).truncate(STAGING_TABLE);
+    inOrder.verify(this.commands, times(1)).truncate(DB, STAGING_TABLE);
 
-    verify(this.commands, never()).createTableStructure(anyString(), anyString());
-    verify(this.commands, never()).drop(anyString());
+    verify(this.commands, never()).createTableStructure(anyString(), anyString(), anyString());
+    verify(this.commands, never()).drop(anyString(), anyString());
   }
 
   public void initializeWithCreatingStagingTable() throws SQLException {
-    when(this.commands.isEmpty(STAGING_TABLE)).thenReturn(Boolean.TRUE);
+    when(this.commands.isEmpty(DB, STAGING_TABLE)).thenReturn(Boolean.TRUE);
     DatabaseMetaData metadata = mock(DatabaseMetaData.class);
     when(this.conn.getMetaData()).thenReturn(metadata);
     ResultSet rs = mock(ResultSet.class);
@@ -144,12 +151,12 @@ public class JdbcWriterInitializerTest {
     Assert.assertTrue(!StringUtils.isEmpty(this.workUnit.getProp(ConfigurationKeys.WRITER_STAGING_TABLE)));
 
     InOrder inOrder = inOrder(this.commands);
-    inOrder.verify(this.commands, times(1)).createTableStructure(anyString(), anyString());
-    inOrder.verify(this.commands, times(1)).drop(anyString());
-    inOrder.verify(this.commands, times(1)).createTableStructure(anyString(), anyString());
+    inOrder.verify(this.commands, times(1)).createTableStructure(anyString(), anyString(), anyString());
+    inOrder.verify(this.commands, times(1)).drop(anyString(), anyString());
+    inOrder.verify(this.commands, times(1)).createTableStructure(anyString(), anyString(), anyString());
 
     this.initializer.close();
-    inOrder.verify(this.commands, times(1)).drop(anyString());
-    inOrder.verify(this.commands, never()).truncate(anyString());
+    inOrder.verify(this.commands, times(1)).drop(anyString(), anyString());
+    inOrder.verify(this.commands, never()).truncate(anyString(), anyString());
   }
 }

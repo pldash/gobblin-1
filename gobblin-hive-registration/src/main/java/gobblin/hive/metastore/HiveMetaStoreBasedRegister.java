@@ -1,13 +1,18 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.hive.metastore;
@@ -15,6 +20,8 @@ package gobblin.hive.metastore;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
+
+import lombok.extern.slf4j.Slf4j;
 
 import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
 import org.apache.hadoop.fs.Path;
@@ -25,12 +32,18 @@ import org.apache.hadoop.hive.metastore.api.NoSuchObjectException;
 import org.apache.hadoop.hive.metastore.api.Partition;
 import org.apache.hadoop.hive.metastore.api.Table;
 import org.apache.thrift.TException;
+import org.joda.time.DateTime;
 
+import com.codahale.metrics.Timer;
 import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
+import com.google.common.base.Throwables;
+import com.google.common.primitives.Ints;
 
 import gobblin.annotation.Alpha;
 import gobblin.configuration.State;
+import gobblin.configuration.ConfigurationKeys;
+import gobblin.hive.HiveMetaStoreClientFactory;
 import gobblin.hive.HiveLock;
 import gobblin.hive.HiveMetastoreClientPool;
 import gobblin.hive.HivePartition;
@@ -39,10 +52,12 @@ import gobblin.hive.HiveRegister;
 import gobblin.hive.HiveRegistrationUnit.Column;
 import gobblin.hive.HiveTable;
 import gobblin.hive.spec.HiveSpec;
+import gobblin.metrics.GobblinMetrics;
+import gobblin.metrics.GobblinMetricsRegistry;
+import gobblin.metrics.MetricContext;
+import gobblin.metrics.event.EventSubmitter;
 import gobblin.util.AutoCloseableLock;
 import gobblin.util.AutoReturnableObject;
-
-import lombok.extern.slf4j.Slf4j;
 
 
 /**
@@ -65,8 +80,23 @@ import lombok.extern.slf4j.Slf4j;
 @Alpha
 public class HiveMetaStoreBasedRegister extends HiveRegister {
 
+  public static final String HIVE_REGISTER_METRICS_PREFIX = "hiveRegister.";
+  public static final String ADD_PARTITION_TIMER = HIVE_REGISTER_METRICS_PREFIX + "addPartitionTimerTimer";
+  public static final String GET_HIVE_PARTITION = HIVE_REGISTER_METRICS_PREFIX + "getPartitionTimer";
+  public static final String ALTER_PARTITION = HIVE_REGISTER_METRICS_PREFIX + "alterPartitionTimer";
+  public static final String TABLE_EXISTS = HIVE_REGISTER_METRICS_PREFIX + "tableExistsTimer";
+  public static final String ALTER_TABLE = HIVE_REGISTER_METRICS_PREFIX + "alterTableTimer";
+  public static final String GET_HIVE_DATABASE = HIVE_REGISTER_METRICS_PREFIX + "getDatabaseTimer";
+  public static final String CREATE_HIVE_DATABASE = HIVE_REGISTER_METRICS_PREFIX + "createDatabaseTimer";
+  public static final String CREATE_HIVE_TABLE = HIVE_REGISTER_METRICS_PREFIX + "createTableTimer";
+  public static final String GET_HIVE_TABLE = HIVE_REGISTER_METRICS_PREFIX + "getTableTimer";
+  public static final String DROP_TABLE = HIVE_REGISTER_METRICS_PREFIX + "dropTableTimer";
+  public static final String PATH_REGISTER_TIMER = HIVE_REGISTER_METRICS_PREFIX + "pathRegisterTimer";
+
   private final HiveMetastoreClientPool clientPool;
   private final HiveLock locks = new HiveLock();
+  private final EventSubmitter eventSubmitter;
+  private final MetricContext metricContext;
 
   public HiveMetaStoreBasedRegister(State state, Optional<String> metastoreURI) throws IOException {
     super(state);
@@ -75,11 +105,17 @@ public class HiveMetaStoreBasedRegister extends HiveRegister {
     config.setMaxTotal(this.props.getNumThreads());
     config.setMaxIdle(this.props.getNumThreads());
     this.clientPool = HiveMetastoreClientPool.get(this.props.getProperties(), metastoreURI);
+
+    this.metricContext =
+        GobblinMetricsRegistry.getInstance().getMetricContext(state, HiveMetaStoreBasedRegister.class, GobblinMetrics.getCustomTagsFromState(state));
+
+    this.eventSubmitter = new EventSubmitter.Builder(this.metricContext, "gobblin.hive.HiveMetaStoreBasedRegister").build();
   }
 
   @Override
   protected void registerPath(HiveSpec spec) throws IOException {
-    try (AutoReturnableObject<IMetaStoreClient> client = this.clientPool.getClient()) {
+    try (Timer.Context context = this.metricContext.timer(PATH_REGISTER_TIMER).time();
+        AutoReturnableObject<IMetaStoreClient> client = this.clientPool.getClient()) {
       Table table = HiveMetaStoreUtils.getTable(spec.getTable());
 
       createDbIfNotExists(client.get(), table.getDbName());
@@ -89,7 +125,9 @@ public class HiveMetaStoreBasedRegister extends HiveRegister {
       if (partition.isPresent()) {
         addOrAlterPartition(client.get(), table, HiveMetaStoreUtils.getPartition(partition.get()), spec);
       }
+      HiveMetaStoreEventHelper.submitSuccessfulPathRegistration(eventSubmitter, spec);
     } catch (TException e) {
+      HiveMetaStoreEventHelper.submitFailedPathRegistration(eventSubmitter, spec, e);
       throw new IOException(e);
     }
   }
@@ -107,7 +145,9 @@ public class HiveMetaStoreBasedRegister extends HiveRegister {
 
     try (AutoCloseableLock lock = this.locks.getDbLock(dbName)) {
       try {
-        client.getDatabase(db.getName());
+        try (Timer.Context context = this.metricContext.timer(GET_HIVE_DATABASE).time()) {
+          client.getDatabase(db.getName());
+        }
         return false;
       } catch (NoSuchObjectException nsoe) {
         // proceed with create
@@ -120,12 +160,16 @@ public class HiveMetaStoreBasedRegister extends HiveRegister {
       db.setLocationUri(new Path(this.hiveDbRootDir.get(), dbName + HIVE_DB_EXTENSION).toString());
 
       try {
-        client.createDatabase(db);
+        try (Timer.Context context = this.metricContext.timer(CREATE_HIVE_DATABASE).time()) {
+          client.createDatabase(db);
+        }
         log.info("Created database " + dbName);
+        HiveMetaStoreEventHelper.submitSuccessfulDBCreation(this.eventSubmitter, dbName);
         return true;
       } catch (AlreadyExistsException e) {
         return false;
       } catch (TException e) {
+        HiveMetaStoreEventHelper.submitFailedDBCreation(this.eventSubmitter, dbName, e);
         throw new IOException("Unable to create Hive database " + dbName, e);
       }
     }
@@ -135,7 +179,7 @@ public class HiveMetaStoreBasedRegister extends HiveRegister {
   public boolean createTableIfNotExists(HiveTable table) throws IOException {
     try (AutoReturnableObject<IMetaStoreClient> client = this.clientPool.getClient();
         AutoCloseableLock lock = this.locks.getTableLock(table.getDbName(), table.getTableName())) {
-      return createTableIfNotExists(client.get(), HiveMetaStoreUtils.getTable(table));
+      return createTableIfNotExists(client.get(), HiveMetaStoreUtils.getTable(table), table);
     }
   }
 
@@ -144,31 +188,45 @@ public class HiveMetaStoreBasedRegister extends HiveRegister {
     try (AutoReturnableObject<IMetaStoreClient> client = this.clientPool.getClient();
         AutoCloseableLock lock = this.locks.getTableLock(table.getDbName(), table.getTableName())) {
       try {
-        client.get().getPartition(table.getDbName(), table.getTableName(), partition.getValues());
+        try (Timer.Context context = this.metricContext.timer(GET_HIVE_PARTITION).time()) {
+          client.get().getPartition(table.getDbName(), table.getTableName(), partition.getValues());
+        }
         return false;
       } catch (NoSuchObjectException e) {
-        client.get().alter_partition(table.getDbName(), table.getTableName(),
-            HiveMetaStoreUtils.getPartition(partition));
+        try (Timer.Context context = this.metricContext.timer(ALTER_PARTITION).time()) {
+          client.get().alter_partition(table.getDbName(), table.getTableName(),
+              getPartitionWithCreateTimeNow(HiveMetaStoreUtils.getPartition(partition)));
+        }
+        HiveMetaStoreEventHelper.submitSuccessfulPartitionAdd(this.eventSubmitter, table, partition);
         return true;
       }
     } catch (TException e) {
+      HiveMetaStoreEventHelper.submitFailedPartitionAdd(this.eventSubmitter, table, partition, e);
       throw new IOException(String.format("Unable to add partition %s in table %s in db %s", partition.getValues(),
           table.getTableName(), table.getDbName()), e);
     }
   }
 
-  private boolean createTableIfNotExists(IMetaStoreClient client, Table table) throws IOException {
+  private boolean createTableIfNotExists(IMetaStoreClient client, Table table, HiveTable hiveTable) throws IOException {
     String dbName = table.getDbName();
     String tableName = table.getTableName();
 
     try (AutoCloseableLock lock = this.locks.getTableLock(dbName, tableName)) {
-      if (client.tableExists(table.getDbName(), table.getTableName())) {
+      boolean tableExists;
+      try (Timer.Context context = this.metricContext.timer(TABLE_EXISTS).time()) {
+        tableExists = client.tableExists(table.getDbName(), table.getTableName());
+      }
+      if (tableExists) {
         return false;
       }
-      client.createTable(table);
+      try (Timer.Context context = this.metricContext.timer(CREATE_HIVE_TABLE).time()) {
+        client.createTable(getTableWithCreateTimeNow(table));
+      }
       log.info(String.format("Created Hive table %s in db %s", tableName, dbName));
+      HiveMetaStoreEventHelper.submitSuccessfulTableCreation(this.eventSubmitter, hiveTable);
       return true;
     } catch (TException e) {
+      HiveMetaStoreEventHelper.submitFailedTableCreation(eventSubmitter, hiveTable, e);
       throw new IOException(String.format("Error in creating or altering Hive table %s in db %s", table.getTableName(),
           table.getDbName()), e);
     }
@@ -180,21 +238,33 @@ public class HiveMetaStoreBasedRegister extends HiveRegister {
     String tableName = table.getTableName();
     try (AutoCloseableLock lock = this.locks.getTableLock(dbName, tableName)) {
       try {
-        client.createTable(table);
+        try (Timer.Context context = this.metricContext.timer(CREATE_HIVE_TABLE).time()) {
+          client.createTable(getTableWithCreateTimeNow(table));
+        }
         log.info(String.format("Created Hive table %s in db %s", tableName, dbName));
-      } catch (TException e) {
+      } catch (AlreadyExistsException e) {
+        log.info("Table {} already exists in db {}.", tableName, dbName);
         try {
-          HiveTable existingTable = HiveMetaStoreUtils.getHiveTable(client.getTable(dbName, tableName));
+          HiveTable existingTable;
+          try (Timer.Context context = this.metricContext.timer(GET_HIVE_TABLE).time()) {
+            existingTable = HiveMetaStoreUtils.getHiveTable(client.getTable(dbName, tableName));
+          }
           if (needToUpdateTable(existingTable, spec.getTable())) {
-            client.alter_table(dbName, tableName, table);
+            try (Timer.Context context = this.metricContext.timer(ALTER_TABLE).time()) {
+              client.alter_table(dbName, tableName, getTableWithCreateTime(table, existingTable));
+            }
             log.info(String.format("updated Hive table %s in db %s", tableName, dbName));
           }
         } catch (TException e2) {
           log.error(
-              String.format("Unable to create or alter Hive table %s in db %s: " + e.getMessage(), tableName, dbName),
+              String.format("Unable to create or alter Hive table %s in db %s: " + e2.getMessage(), tableName, dbName),
               e2);
           throw e2;
         }
+      } catch (TException e) {
+        log.error(
+            String.format("Unable to create Hive table %s in db %s: " + e.getMessage(), tableName, dbName), e);
+        throw e;
       }
     }
   }
@@ -202,7 +272,9 @@ public class HiveMetaStoreBasedRegister extends HiveRegister {
   @Override
   public boolean existsTable(String dbName, String tableName) throws IOException {
     try (AutoReturnableObject<IMetaStoreClient> client = this.clientPool.getClient()) {
-      return client.get().tableExists(dbName, tableName);
+      try (Timer.Context context = this.metricContext.timer(TABLE_EXISTS).time()) {
+        return client.get().tableExists(dbName, tableName);
+      }
     } catch (TException e) {
       throw new IOException(String.format("Unable to check existence of table %s in db %s", tableName, dbName), e);
     }
@@ -212,7 +284,9 @@ public class HiveMetaStoreBasedRegister extends HiveRegister {
   public boolean existsPartition(String dbName, String tableName, List<Column> partitionKeys,
       List<String> partitionValues) throws IOException {
     try (AutoReturnableObject<IMetaStoreClient> client = this.clientPool.getClient()) {
-      client.get().getPartition(dbName, tableName, partitionValues);
+      try (Timer.Context context = this.metricContext.timer(GET_HIVE_PARTITION).time()) {
+        client.get().getPartition(dbName, tableName, partitionValues);
+      }
       return true;
     } catch (NoSuchObjectException e) {
       return false;
@@ -225,11 +299,20 @@ public class HiveMetaStoreBasedRegister extends HiveRegister {
   @Override
   public void dropTableIfExists(String dbName, String tableName) throws IOException {
     try (AutoReturnableObject<IMetaStoreClient> client = this.clientPool.getClient()) {
-      if (client.get().tableExists(dbName, tableName)) {
-        client.get().dropTable(dbName, tableName);
+      boolean tableExists;
+      try (Timer.Context context = this.metricContext.timer(TABLE_EXISTS).time()) {
+        tableExists = client.get().tableExists(dbName, tableName);
+      }
+      if (tableExists) {
+        try (Timer.Context context = this.metricContext.timer(DROP_TABLE).time()) {
+          client.get().dropTable(dbName, tableName);
+        }
+        String metastoreURI = this.clientPool.getHiveConf().get(HiveMetaStoreClientFactory.HIVE_METASTORE_TOKEN_SIGNATURE, "null");
+        HiveMetaStoreEventHelper.submitSuccessfulTableDrop(eventSubmitter, dbName, tableName, metastoreURI);
         log.info("Dropped table " + tableName + " in db " + dbName);
       }
     } catch (TException e) {
+      HiveMetaStoreEventHelper.submitFailedTableDrop(eventSubmitter, dbName, tableName, e);
       throw new IOException(String.format("Unable to deregister table %s in db %s", tableName, dbName), e);
     }
   }
@@ -238,11 +321,16 @@ public class HiveMetaStoreBasedRegister extends HiveRegister {
   public void dropPartitionIfExists(String dbName, String tableName, List<Column> partitionKeys,
       List<String> partitionValues) throws IOException {
     try (AutoReturnableObject<IMetaStoreClient> client = this.clientPool.getClient()) {
-      client.get().dropPartition(dbName, tableName, partitionValues, false);
+      try (Timer.Context context = this.metricContext.timer(DROP_TABLE).time()) {
+        client.get().dropPartition(dbName, tableName, partitionValues, false);
+      }
+      String metastoreURI = this.clientPool.getHiveConf().get(HiveMetaStoreClientFactory.HIVE_METASTORE_TOKEN_SIGNATURE, "null");
+      HiveMetaStoreEventHelper.submitSuccessfulPartitionDrop(eventSubmitter, dbName, tableName, partitionValues, metastoreURI);
       log.info("Dropped partition " + partitionValues + " in table " + tableName + " in db " + dbName);
     } catch (NoSuchObjectException e) {
       // Partition does not exist. Nothing to do
     } catch (TException e) {
+      HiveMetaStoreEventHelper.submitFailedPartitionDrop(eventSubmitter, dbName, tableName, partitionValues, e);
       throw new IOException(String.format("Unable to check existence of Hive partition %s in table %s in db %s",
           partitionValues, tableName, dbName), e);
     }
@@ -258,25 +346,37 @@ public class HiveMetaStoreBasedRegister extends HiveRegister {
         this.locks.getPartitionLock(table.getDbName(), table.getTableName(), partition.getValues())) {
 
       try {
-        client.add_partition(partition);
+        try (Timer.Context context = this.metricContext.timer(ADD_PARTITION_TIMER).time()) {
+          client.add_partition(getPartitionWithCreateTimeNow(partition));
+        }
         log.info(String.format("Added partition %s to table %s with location %s", stringifyPartition(partition),
             table.getTableName(), partition.getSd().getLocation()));
       } catch (TException e) {
         try {
-          HivePartition existingPartition = HiveMetaStoreUtils
-              .getHivePartition(client.getPartition(table.getDbName(), table.getTableName(), partition.getValues()));
+          HivePartition existingPartition;
+          try (Timer.Context context = this.metricContext.timer(GET_HIVE_PARTITION).time()) {
+            existingPartition = HiveMetaStoreUtils.getHivePartition(
+                client.getPartition(table.getDbName(), table.getTableName(), partition.getValues()));
+          }
 
           if (needToUpdatePartition(existingPartition, spec.getPartition().get())) {
-            client.alter_partition(table.getDbName(), table.getTableName(), partition);
-            log.info(String.format("Updated partition %s in table %s with location %s", stringifyPartition(partition),
+            log.info(String.format("Partition update required. ExistingPartition %s, newPartition %s",
+                stringifyPartition(existingPartition), stringifyPartition(spec.getPartition().get())));
+            Partition newPartition = getPartitionWithCreateTime(partition, existingPartition);
+            log.info(String.format("Altering partition %s", newPartition));
+            try (Timer.Context context = this.metricContext.timer(ALTER_PARTITION).time()) {
+              client.alter_partition(table.getDbName(), table.getTableName(), newPartition);
+            }
+            log.info(String.format("Updated partition %s in table %s with location %s", stringifyPartition(newPartition),
                 table.getTableName(), partition.getSd().getLocation()));
           } else {
             log.info(String.format("Partition %s in table %s with location %s already exists and no need to update",
                 stringifyPartition(partition), table.getTableName(), partition.getSd().getLocation()));
           }
-        } catch (TException e2) {
-          log.error(String.format("Unable to add or alter partition %s in table %s with location %s: " + e.getMessage(),
-              stringifyPartition(partition), table.getTableName(), partition.getSd().getLocation()), e);
+        } catch (Throwable e2) {
+          log.error(String.format(
+              "Unable to add or alter partition %s in table %s with location %s: " + e2.getMessage(),
+              stringifyPartitionVerbose(partition), table.getTableName(), partition.getSd().getLocation()), e2);
           throw e2;
         }
       }
@@ -285,15 +385,27 @@ public class HiveMetaStoreBasedRegister extends HiveRegister {
 
   private static String stringifyPartition(Partition partition) {
     if (log.isDebugEnabled()) {
-      return partition.toString();
+      return stringifyPartitionVerbose(partition);
     }
     return Arrays.toString(partition.getValues().toArray());
+  }
+
+  private static String stringifyPartition(HivePartition partition) {
+    return partition.toString();
+  }
+
+  private static String stringifyPartitionVerbose(Partition partition) {
+    return partition.toString();
   }
 
   @Override
   public Optional<HiveTable> getTable(String dbName, String tableName) throws IOException {
     try (AutoReturnableObject<IMetaStoreClient> client = this.clientPool.getClient()) {
-      return Optional.of(HiveMetaStoreUtils.getHiveTable(client.get().getTable(dbName, tableName)));
+      Table hiveTable;
+      try (Timer.Context context = this.metricContext.timer(GET_HIVE_TABLE).time()) {
+        hiveTable = client.get().getTable(dbName, tableName);
+      }
+      return Optional.of(HiveMetaStoreUtils.getHiveTable(hiveTable));
     } catch (NoSuchObjectException e) {
       return Optional.<HiveTable> absent();
     } catch (TException e) {
@@ -306,8 +418,11 @@ public class HiveMetaStoreBasedRegister extends HiveRegister {
       List<String> partitionValues) throws IOException {
 
     try (AutoReturnableObject<IMetaStoreClient> client = this.clientPool.getClient()) {
-      return Optional
-          .of(HiveMetaStoreUtils.getHivePartition(client.get().getPartition(dbName, tableName, partitionValues)));
+      Partition hivePartition;
+      try (Timer.Context context = this.metricContext.timer(GET_HIVE_PARTITION).time()) {
+        hivePartition = client.get().getPartition(dbName, tableName, partitionValues);
+      }
+        return Optional.of(HiveMetaStoreUtils.getHivePartition(hivePartition));
     } catch (NoSuchObjectException e) {
       return Optional.<HivePartition> absent();
     } catch (TException e) {
@@ -319,11 +434,20 @@ public class HiveMetaStoreBasedRegister extends HiveRegister {
   @Override
   public void alterTable(HiveTable table) throws IOException {
     try (AutoReturnableObject<IMetaStoreClient> client = this.clientPool.getClient()) {
-      if (!client.get().tableExists(table.getDbName(), table.getTableName())) {
+      boolean tableExists;
+      try (Timer.Context context = this.metricContext.timer(TABLE_EXISTS).time()) {
+        tableExists = client.get().tableExists(table.getDbName(), table.getTableName());
+      }
+      if (!tableExists) {
         throw new IOException("Table " + table.getTableName() + " in db " + table.getDbName() + " does not exist");
       }
-      client.get().alter_table(table.getDbName(), table.getTableName(), HiveMetaStoreUtils.getTable(table));
+      try (Timer.Context context = this.metricContext.timer(ALTER_TABLE).time()) {
+        client.get().alter_table(table.getDbName(), table.getTableName(),
+            getTableWithCreateTimeNow(HiveMetaStoreUtils.getTable(table)));
+      }
+      HiveMetaStoreEventHelper.submitSuccessfulTableAlter(eventSubmitter, table);
     } catch (TException e) {
+      HiveMetaStoreEventHelper.submitFailedTableAlter(eventSubmitter, table, e);
       throw new IOException("Unable to alter table " + table.getTableName() + " in db " + table.getDbName(), e);
     }
   }
@@ -331,11 +455,58 @@ public class HiveMetaStoreBasedRegister extends HiveRegister {
   @Override
   public void alterPartition(HiveTable table, HivePartition partition) throws IOException {
     try (AutoReturnableObject<IMetaStoreClient> client = this.clientPool.getClient()) {
-      client.get().alter_partition(table.getDbName(), table.getTableName(), HiveMetaStoreUtils.getPartition(partition));
+      try (Timer.Context context = this.metricContext.timer(ALTER_PARTITION).time()) {
+        client.get().alter_partition(table.getDbName(), table.getTableName(),
+            getPartitionWithCreateTimeNow(HiveMetaStoreUtils.getPartition(partition)));
+      }
+      HiveMetaStoreEventHelper.submitSuccessfulPartitionAlter(eventSubmitter, table, partition);
     } catch (TException e) {
+      HiveMetaStoreEventHelper.submitFailedPartitionAlter(eventSubmitter, table, partition, e);
       throw new IOException(String.format("Unable to alter partition %s in table %s in db %s", partition.getValues(),
           table.getTableName(), table.getDbName()), e);
     }
+  }
+
+  private Partition getPartitionWithCreateTimeNow(Partition partition) {
+    return getPartitionWithCreateTime(partition, Ints.checkedCast(DateTime.now().getMillis() / 1000));
+  }
+
+  private Partition getPartitionWithCreateTime(Partition partition, HivePartition referencePartition) {
+    return getPartitionWithCreateTime(partition,
+        Ints.checkedCast(referencePartition.getCreateTime().or(DateTime.now().getMillis() / 1000)));
+  }
+
+  /**
+   * Sets create time if not already set.
+   */
+  private Partition getPartitionWithCreateTime(Partition partition, int createTime) {
+    if (partition.isSetCreateTime() && partition.getCreateTime() > 0) {
+      return partition;
+    }
+    Partition actualPartition = partition.deepCopy();
+    actualPartition.setCreateTime(createTime);
+    return actualPartition;
+  }
+
+  private Table getTableWithCreateTimeNow(Table table) {
+    return gettableWithCreateTime(table, Ints.checkedCast(DateTime.now().getMillis() / 1000));
+  }
+
+  private Table getTableWithCreateTime(Table table, HiveTable referenceTable) {
+    return gettableWithCreateTime(table,
+        Ints.checkedCast(referenceTable.getCreateTime().or(DateTime.now().getMillis() / 1000)));
+  }
+
+  /**
+   * Sets create time if not already set.
+   */
+  private Table gettableWithCreateTime(Table table, int createTime) {
+    if (table.isSetCreateTime() && table.getCreateTime() > 0) {
+      return table;
+    }
+    Table actualtable = table.deepCopy();
+    actualtable.setCreateTime(createTime);
+    return actualtable;
   }
 
 }

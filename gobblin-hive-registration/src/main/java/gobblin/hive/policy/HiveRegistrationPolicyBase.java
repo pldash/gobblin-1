@@ -1,17 +1,33 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.hive.policy;
 
+import com.codahale.metrics.Timer;
+import com.google.common.base.Splitter;
+import com.typesafe.config.Config;
+import gobblin.config.client.ConfigClient;
+import gobblin.config.client.api.VersionStabilityPolicy;
+import gobblin.hive.HiveRegister;
+import gobblin.hive.metastore.HiveMetaStoreUtils;
+import gobblin.instrumented.Instrumented;
+import gobblin.metrics.MetricContext;
+import gobblin.source.extractor.extract.kafka.ConfigStoreUtils;
+import gobblin.source.extractor.extract.kafka.KafkaSource;
 import java.io.IOException;
 import java.net.URI;
 import java.util.Collection;
@@ -64,6 +80,11 @@ public class HiveRegistrationPolicyBase implements HiveRegistrationPolicy {
   public static final String HIVE_TABLE_NAME_SUFFIX = "hive.table.name.suffix";
   public static final String HIVE_SANITIZE_INVALID_NAMES = "hive.sanitize.invalid.names";
   public static final String HIVE_FS_URI = "hive.registration.fs.uri";
+  // {@value PRIMARY_TABLE_TOKEN} if present in {@value ADDITIONAL_HIVE_TABLE_NAMES} or dbPrefix.{@value HIVE_TABLE_NAME}
+  // .. will be replaced by the table name determined via {@link #getTableName(Path)}
+  public static final String PRIMARY_TABLE_TOKEN = "$PRIMARY_TABLE";
+  protected static final ConfigClient configClient =
+      gobblin.config.client.ConfigClient.createConfigClient(VersionStabilityPolicy.WEAK_LOCAL_STABILITY);
 
   /**
    * A valid db or table name should start with an alphanumeric character, and contains only
@@ -75,6 +96,7 @@ public class HiveRegistrationPolicyBase implements HiveRegistrationPolicy {
    * A valid db or table name should contain at least one letter or '_' (i.e., should not be numbers only).
    */
   private static final Pattern VALID_DB_TABLE_NAME_PATTERN_2 = Pattern.compile(".*[a-z_].*");
+  public static final String CONFIG_FOR_TOPIC_TIMER = "configForTopicTimer";
 
   protected final HiveRegProps props;
   protected final FileSystem fs;
@@ -85,6 +107,8 @@ public class HiveRegistrationPolicyBase implements HiveRegistrationPolicy {
   protected final String dbNameSuffix;
   protected final String tableNamePrefix;
   protected final String tableNameSuffix;
+
+  protected final MetricContext metricContext;
 
   public HiveRegistrationPolicyBase(State props) throws IOException {
     Preconditions.checkNotNull(props);
@@ -103,6 +127,8 @@ public class HiveRegistrationPolicyBase implements HiveRegistrationPolicy {
     this.dbNameSuffix = props.getProp(HIVE_DATABASE_NAME_SUFFIX, StringUtils.EMPTY);
     this.tableNamePrefix = props.getProp(HIVE_TABLE_NAME_PREFIX, StringUtils.EMPTY);
     this.tableNameSuffix = props.getProp(HIVE_TABLE_NAME_SUFFIX, StringUtils.EMPTY);
+
+    this.metricContext = Instrumented.getMetricContext(props, HiveRegister.class);
   }
 
   /**
@@ -154,32 +180,89 @@ public class HiveRegistrationPolicyBase implements HiveRegistrationPolicy {
     if (!this.props.contains(HIVE_TABLE_NAME) && !this.props.contains(HIVE_TABLE_REGEX)) {
       return Optional.<String> absent();
     }
-
     return Optional.<String> of(
         this.tableNamePrefix + getDatabaseOrTableName(path, HIVE_TABLE_NAME, HIVE_TABLE_REGEX, this.tableNamePattern)
             + this.tableNameSuffix);
   }
 
-  /**
-   * Obtain Hive table names. The returned {@link Iterable} contains the table name returned by
-   * {@link #getTableName(Path)} (if present) plus additional table names specified in
-   * {@link #ADDITIONAL_HIVE_TABLE_NAMES}.
+  /***
+   * Obtain Hive table names.
+   *
+   * The returned {@link Iterable} contains:
+   *  1. Table name returned by {@link #getTableName(Path)}
+   *  2. Table names specified by <code>additional.hive.table.names</code>
+   *
+   * In table names above, the {@value PRIMARY_TABLE_TOKEN} if present is also replaced by the
+   * table name obtained via {@link #getTableName(Path)}.
+   *
+   * @param path Path for the table on filesystem.
+   * @return Table names to register.
    */
   protected Iterable<String> getTableNames(Path path) {
+    List<String> tableNames = getTableNames(Optional.<String>absent(), path);
+
+    Preconditions.checkState(!tableNames.isEmpty(), "Hive table name not specified");
+    return tableNames;
+  }
+
+  /***
+   * Obtain Hive table names filtered by <code>dbPrefix</code> (if present).
+   *
+   * The returned {@link List} contains:
+   *  A. If <code>dbPrefix</code> is absent:
+   *    1. Table name returned by {@link #getTableName(Path)}
+   *    2. Table names specified by <code>additional.hive.table.names</code>
+   *  B. If dbPrefix is present:
+   *    1. Table names specified by <code>dbPrefix.hive.table.names</code>
+   *
+   * In table names above, the {@value PRIMARY_TABLE_TOKEN} if present is also replaced by the
+   * table name obtained via {@link #getTableName(Path)}.
+   *
+   * @param dbPrefix Prefix to the property <code>additional.table.names</code>, to obtain table names only
+   *                         for the specified db. Eg. If <code>dbPrefix</code> is db, then
+   *                         <code>db.hive.table.names</code> is the resolved property name.
+   * @param path Path for the table on filesystem.
+   * @return Table names to register.
+   */
+  protected List<String> getTableNames(Optional<String> dbPrefix, Path path) {
     List<String> tableNames = Lists.newArrayList();
 
-    Optional<String> tableName;
-    if ((tableName = getTableName(path)).isPresent()) {
-      tableNames.add(tableName.get());
+    Optional<String> primaryTableName;
+    if ((primaryTableName = getTableName(path)).isPresent() && !dbPrefix.isPresent()) {
+      tableNames.add(primaryTableName.get());
+    }
+    Optional<Config> configForTopic = Optional.<Config>absent();
+    if (primaryTableName.isPresent()) {
+      Timer.Context context = this.metricContext.timer(CONFIG_FOR_TOPIC_TIMER).time();
+      configForTopic =
+          ConfigStoreUtils.getConfigForTopic(this.props.getProperties(), KafkaSource.TOPIC_NAME, this.configClient);
+      context.close();
     }
 
-    if (!Strings.isNullOrEmpty(this.props.getProp(ADDITIONAL_HIVE_TABLE_NAMES))) {
-      for (String additionalTableName : this.props.getPropAsList(ADDITIONAL_HIVE_TABLE_NAMES)) {
-        tableNames.add(this.tableNamePrefix + additionalTableName + this.tableNameSuffix);
+    String additionalNamesProp;
+    if (dbPrefix.isPresent()) {
+      additionalNamesProp = String.format("%s.%s", dbPrefix.get(), HIVE_TABLE_NAME);
+    } else {
+      additionalNamesProp = ADDITIONAL_HIVE_TABLE_NAMES;
+    }
+
+    if (configForTopic.isPresent() && configForTopic.get().hasPath(additionalNamesProp)) {
+      for (String additionalTableName : Splitter.on(",")
+          .trimResults()
+          .splitToList(configForTopic.get().getString(additionalNamesProp))) {
+        String resolvedTableName =
+            StringUtils.replace(additionalTableName, PRIMARY_TABLE_TOKEN, primaryTableName.get());
+        tableNames.add(this.tableNamePrefix + resolvedTableName + this.tableNameSuffix);
+      }
+    } else if (!Strings.isNullOrEmpty(this.props.getProp(additionalNamesProp))) {
+      for (String additionalTableName : this.props.getPropAsList(additionalNamesProp)) {
+        String resolvedTableName =
+            primaryTableName.isPresent() ? StringUtils.replace(additionalTableName, PRIMARY_TABLE_TOKEN,
+                primaryTableName.get()) : additionalTableName;
+        tableNames.add(this.tableNamePrefix + resolvedTableName + this.tableNameSuffix);
       }
     }
 
-    Preconditions.checkState(!tableNames.isEmpty(), "Hive table name not specified");
     return tableNames;
   }
 
@@ -225,8 +308,18 @@ public class HiveRegistrationPolicyBase implements HiveRegistrationPolicy {
     List<HiveTable> tables = Lists.newArrayList();
 
     for (String databaseName : getDatabaseNames(path)) {
-      for (String tableName : getTableNames(path)) {
+      // Get tables to register ONLY for this Hive database (specified via prefix filter in properties)
+      boolean foundTablesViaDbFilter = false;
+      for (String tableName : getTableNames(Optional.of(databaseName), path)) {
         tables.add(getTable(path, databaseName, tableName));
+        foundTablesViaDbFilter = true;
+      }
+
+      // If no tables found via db filter, get tables to register in all Hive databases and add them for this database
+      if (!foundTablesViaDbFilter) {
+        for (String tableName : getTableNames(path)) {
+          tables.add(getTable(path, databaseName, tableName));
+        }
       }
     }
     return tables;
@@ -247,7 +340,14 @@ public class HiveRegistrationPolicyBase implements HiveRegistrationPolicy {
 
     table.setLocation(this.fs.makeQualified(getTableLocation(path)).toString());
     table.setSerDeProps(path);
-    table.setProps(this.props.getTablePartitionProps());
+
+    // Setting table-level props.
+    State tableProps = new State(this.props.getTablePartitionProps());
+    if (this.props.getRuntimeTableProps().isPresent()){
+      tableProps.setProp(HiveMetaStoreUtils.RUNTIME_PROPS, this.props.getRuntimeTableProps().get());
+    }
+    table.setProps(tableProps);
+
     table.setStorageProps(this.props.getStorageProps());
     table.setSerDeProps(this.props.getSerdeProps());
     table.setNumBuckets(-1);

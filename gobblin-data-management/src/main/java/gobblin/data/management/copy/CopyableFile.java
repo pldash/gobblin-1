@@ -1,13 +1,18 @@
 /*
- * Copyright (C) 2014-2016 LinkedIn Corp. All rights reserved.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
- * this file except in compliance with the License. You may obtain a copy of the
- * License at  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed
- * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, either express or implied.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package gobblin.data.management.copy;
@@ -84,7 +89,7 @@ public class CopyableFile extends CopyEntity implements File {
   @lombok.Builder(builderClassName = "Builder", builderMethodName = "_hiddenBuilder")
   public CopyableFile(FileStatus origin, Path destination, OwnerAndPermission destinationOwnerAndPermission,
       List<OwnerAndPermission> ancestorsOwnerAndPermission, byte[] checksum, PreserveAttributes preserve,
-      String fileSet, long originTimestamp, long upstreamTimestamp, Map<String, Object> additionalMetadata) {
+      String fileSet, long originTimestamp, long upstreamTimestamp, Map<String, String> additionalMetadata) {
     super(fileSet, additionalMetadata);
     this.origin = origin;
     this.destination = destination;
@@ -139,7 +144,7 @@ public class CopyableFile extends CopyEntity implements File {
 
     private CopyConfiguration configuration;
     private FileSystem originFs;
-    private Map<String, Object> additionalMetadata;
+    private Map<String, String> additionalMetadata;
 
     private Builder originFS(FileSystem originFs) {
       this.originFs = originFs;
@@ -259,7 +264,7 @@ public class CopyableFile extends CopyEntity implements File {
     Optional<FileStatus> originFileStatus = copyConfiguration.getCopyContext().getFileStatus(fs, path);
 
     if (!originFileStatus.isPresent()) {
-      throw new IOException(String.format("Origin path %s does not exist.", originFileStatus));
+      throw new IOException(String.format("Origin path %s does not exist.", path));
     }
 
     String group = null;
